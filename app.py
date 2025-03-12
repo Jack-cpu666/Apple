@@ -4,7 +4,7 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'  # Replace with a strong secret in production
-# Use Gevent as the async mode to avoid Eventlet DNS issues
+# Use Gevent as the async mode to avoid Eventlet-related issues
 socketio = SocketIO(app, async_mode='gevent')
 
 # In-memory storage (for production, use a database)
