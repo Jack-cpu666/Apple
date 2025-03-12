@@ -1,5 +1,5 @@
 import eventlet
-eventlet.monkey_patch(dns=False)  # Disable Eventlet's DNS patching to avoid dnspython conflicts
+eventlet.monkey_patch(dns=False)  # Disable Eventlet's DNS patching to avoid conflicts with dnspython
 
 import os
 from flask import Flask, request, jsonify, session, render_template_string
