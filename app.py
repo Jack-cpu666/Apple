@@ -1,15 +1,15 @@
 import eventlet
-eventlet.monkey_patch(dns=False)  # Disable Eventlet's DNS patching to avoid conflicts with dnspython
+eventlet.monkey_patch(dns=False)  # Disable Eventlet's DNS patching to avoid dnspython conflicts
 
 import os
 from flask import Flask, request, jsonify, session, render_template_string
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your_secret_key'  # Use a strong secret in production
+app.config['SECRET_KEY'] = 'your_secret_key'  # Replace with a strong secret in production
 socketio = SocketIO(app, async_mode='eventlet')
 
-# In-memory storage (use a database for production)
+# In-memory storage (use a database in production)
 users = {}  # {phone_number: name}
 online_users = set()
 ADMIN_PASSWORD = 'jack'
@@ -95,7 +95,7 @@ HTML_TEMPLATE = '''
       left: 0;
       display: none;
       flex-direction: column;
-      padding: 60px 15px 15px 15px;
+      padding: 60px 15px 15px 15px; /* Top padding to allow for header */
     }
     /* Home Screen styling */
     #homeScreen {
