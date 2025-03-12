@@ -1,15 +1,13 @@
-import eventlet
-eventlet.monkey_patch(dns=False)  # Disable Eventlet's DNS patching to avoid conflicts with dnspython
-
 import os
 from flask import Flask, request, jsonify, session, render_template_string
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key'  # Replace with a strong secret in production
-socketio = SocketIO(app, async_mode='eventlet')
+# Use Gevent as the async mode to avoid Eventlet DNS issues
+socketio = SocketIO(app, async_mode='gevent')
 
-# In-memory storage (use a database in production)
+# In-memory storage (for production, use a database)
 users = {}  # {phone_number: name}
 online_users = set()
 ADMIN_PASSWORD = 'jack'
