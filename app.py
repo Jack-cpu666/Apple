@@ -1,13 +1,15 @@
+import eventlet
+eventlet.monkey_patch(dns=False)  # Disable Eventlet's DNS patching to avoid conflicts with dnspython
+
 import os
 from flask import Flask, request, jsonify, session, render_template_string
 from flask_socketio import SocketIO, emit, join_room, leave_room
-import eventlet
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your_secret_key'  # Use a strong and constant secret key in production
+app.config['SECRET_KEY'] = 'your_secret_key'  # Use a strong secret in production
 socketio = SocketIO(app, async_mode='eventlet')
 
-# In-memory storage (use a database for production persistence)
+# In-memory storage (use a database for production)
 users = {}  # {phone_number: name}
 online_users = set()
 ADMIN_PASSWORD = 'jack'
@@ -34,7 +36,7 @@ HTML_TEMPLATE = '''
       align-items: center;
       height: 100vh;
     }
-    /* iPhone frame – fixed size for design but scales down on smaller screens */
+    /* iPhone frame – fixed size for design but scales on smaller screens */
     .iphone {
       width: 375px;
       height: 812px;
@@ -93,7 +95,7 @@ HTML_TEMPLATE = '''
       left: 0;
       display: none;
       flex-direction: column;
-      padding: 60px 15px 15px 15px; /* Top padding to allow for header */
+      padding: 60px 15px 15px 15px;
     }
     /* Home Screen styling */
     #homeScreen {
