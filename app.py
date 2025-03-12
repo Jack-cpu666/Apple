@@ -4,15 +4,15 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 import eventlet
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your_secret_key'
+app.config['SECRET_KEY'] = 'your_secret_key'  # Use a strong and constant secret key in production
 socketio = SocketIO(app, async_mode='eventlet')
 
-# In-memory storage (use a database in production)
+# In-memory storage (use a database for production persistence)
 users = {}  # {phone_number: name}
 online_users = set()
 ADMIN_PASSWORD = 'jack'
 
-# HTML template styled to look like a modern iPhone with an Apple wallpaper background and a reduced notch size
+# HTML template styled to look like a modern iPhone with an Apple wallpaper and responsive scaling
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="en">
@@ -34,10 +34,11 @@ HTML_TEMPLATE = '''
       align-items: center;
       height: 100vh;
     }
-    /* iPhone frame using an Apple wallpaper */
+    /* iPhone frame – fixed size for design but scales down on smaller screens */
     .iphone {
       width: 375px;
       height: 812px;
+      max-width: 100%;
       background: url('https://www.apple.com/v/iphone/home/af/images/overview/hero/hero_iphone__d6e06xbkqay6_large.jpg') no-repeat center center;
       background-size: cover;
       border: 16px solid #333;
