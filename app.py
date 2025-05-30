@@ -1062,3 +1062,7 @@ def restart_test():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
+    
+    
+# make enumerate available in all templates
+app.jinja_env.globals.update(enumerate=enumerate)
