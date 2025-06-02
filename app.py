@@ -7,58 +7,152 @@ app.secret_key = 'your-secret-key-change-this'
 # Add enumerate to Jinja2 environment
 app.jinja_env.globals.update(enumerate=enumerate)
 
-# Function to generate multiple choice options for questions with single answers
+# Function to generate contextually appropriate multiple choice options
 def generate_multiple_choice(question_id, correct_answer, all_answers):
-    # Common wrong answers for different types of questions
-    wrong_answers_pool = {
-        'numbers': ['fifty (50)', 'one hundred (100)', 'twenty-five (25)', 'fifteen (15)', 'thirty (30)', 'seventy-five (75)'],
-        'people': ['Thomas Jefferson', 'Benjamin Franklin', 'John Adams', 'Alexander Hamilton', 'James Madison', 'Theodore Roosevelt'],
-        'documents': ['the Declaration of Independence', 'the Articles of Confederation', 'the Federalist Papers', 'the Bill of Rights'],
-        'branches': ['the Senate', 'the House of Representatives', 'the Supreme Court', 'the Cabinet'],
-        'wars': ['Revolutionary War', 'War of 1812', 'Mexican-American War', 'Spanish-American War', 'Vietnam War'],
-        'places': ['New York', 'Philadelphia', 'Boston', 'Chicago', 'Los Angeles', 'Virginia'],
-        'months': ['January', 'March', 'May', 'September', 'December'],
-        'general': ['the President', 'Congress', 'the Constitution', 'the Supreme Court', 'the Bill of Rights']
-    }
-    
     # If we already have multiple answers, use them
     if len(all_answers) >= 4:
         return all_answers[:4]
     
-    # Generate wrong answers based on question content
+    # Specific wrong answers for each type of question based on the actual test content
     question_text = CIVICS_QUESTIONS[question_id]['question'].lower()
     options = [correct_answer]
     
-    # Add wrong answers based on question type
-    if 'how many' in question_text or 'years' in question_text:
-        wrong_pool = wrong_answers_pool['numbers']
-    elif 'president' in question_text or 'who' in question_text:
-        wrong_pool = wrong_answers_pool['people']
-    elif 'war' in question_text:
-        wrong_pool = wrong_answers_pool['wars']
-    elif 'month' in question_text:
-        wrong_pool = wrong_answers_pool['months']
-    elif 'where' in question_text or 'capital' in question_text:
-        wrong_pool = wrong_answers_pool['places']
-    else:
-        wrong_pool = wrong_answers_pool['general']
+    # Question-specific wrong answers that make contextual sense
+    specific_wrong_answers = {
+        # Who lived in America before Europeans
+        59: ["Europeans", "Spanish colonists", "English settlers"],
+        
+        # What is supreme law
+        1: ["Declaration of Independence", "Bill of Rights", "Articles of Confederation"],
+        
+        # How many amendments
+        7: ["twenty-five (25)", "thirty (30)", "fifty (50)"],
+        
+        # How many senators
+        18: ["fifty (50)", "four hundred thirty-five (435)", "two hundred (200)"],
+        
+        # How many representatives
+        21: ["one hundred (100)", "fifty (50)", "two hundred (200)"],
+        
+        # President term
+        26: ["two (2)", "six (6)", "eight (8)"],
+        
+        # Senator term
+        19: ["two (2)", "four (4)", "eight (8)"],
+        
+        # Representative term
+        22: ["four (4)", "six (6)", "one (1)"],
+        
+        # Voting age
+        54: ["sixteen (16)", "twenty-one (21)", "twenty-five (25)"],
+        
+        # Who is Commander in Chief
+        32: ["Secretary of Defense", "Chairman of Joint Chiefs", "Congress"],
+        
+        # Who signs bills
+        33: ["Speaker of the House", "Chief Justice", "Vice President"],
+        
+        # Who vetoes bills
+        34: ["Congress", "Supreme Court", "Speaker of the House"],
+        
+        # What does Constitution do
+        2: ["declares independence", "creates political parties", "establishes religion"],
+        
+        # First three words
+        3: ["All men created", "When in the", "In order to"],
+        
+        # What is amendment
+        4: ["a law", "a treaty", "a court decision"],
+        
+        # First 10 amendments
+        5: ["the Constitution", "the Declaration", "the Articles"],
+        
+        # Economic system
+        11: ["socialist economy", "communist economy", "mixed economy"],
+        
+        # Rule of law
+        12: ["Only citizens follow law", "Rich people above law", "President above law"],
+        
+        # Branches of government
+        13: ["the people", "the states", "the military"],
+        
+        # Checks and balances
+        14: ["federalism", "popular sovereignty", "judicial review"],
+        
+        # Who makes federal laws
+        16: ["the President", "the Supreme Court", "the states"],
+        
+        # Two parts of Congress
+        17: ["House and Cabinet", "Senate and Cabinet", "President and Vice President"],
+        
+        # What stops one branch from becoming too powerful
+        14: ["the people", "elections", "the media"],
+        
+        # Month we vote for President
+        27: ["October", "December", "January"],
+        
+        # Political parties
+        45: ["Republican and Independent", "Democratic and Green", "Liberal and Conservative"],
+        
+        # Independence Day
+        99: ["July 3", "August 4", "June 4"],
+        
+        # National anthem
+        98: ["America the Beautiful", "God Bless America", "My Country Tis of Thee"],
+        
+        # Longest rivers
+        88: ["Colorado River", "Rio Grande", "Hudson River"],
+        
+        # West Coast ocean
+        89: ["Atlantic Ocean", "Gulf of Mexico", "Arctic Ocean"],
+        
+        # East Coast ocean
+        90: ["Pacific Ocean", "Gulf of Mexico", "Arctic Ocean"],
+        
+        # Capital of US
+        94: ["New York", "Philadelphia", "Boston"],
+        
+        # Statue of Liberty
+        95: ["Washington D.C.", "Boston Harbor", "Philadelphia"],
+        
+        # Flag stripes
+        96: ["because of 13 colonies", "because of 50 states", "because of founding fathers"],
+        
+        # Flag stars
+        97: ["because of original colonies", "because of amendments", "because of presidents"],
+    }
     
-    # Add wrong answers that don't match the correct answer
-    for wrong in wrong_pool:
+    # Get specific wrong answers for this question
+    if question_id in specific_wrong_answers:
+        wrong_answers = specific_wrong_answers[question_id]
+    else:
+        # Generic wrong answers based on question type
+        if 'how many' in question_text and ('year' in question_text or 'term' in question_text):
+            wrong_answers = ["two (2)", "six (6)", "eight (8)"]
+        elif 'how many' in question_text:
+            wrong_answers = ["twenty-five (25)", "fifty (50)", "one hundred (100)"]
+        elif 'who' in question_text and 'president' in question_text:
+            wrong_answers = ["Congress", "Supreme Court", "Vice President"]
+        elif 'what' in question_text and ('do' in question_text or 'does' in question_text):
+            wrong_answers = ["makes laws", "interprets laws", "enforces laws"]
+        elif 'when' in question_text or 'month' in question_text:
+            wrong_answers = ["January", "March", "September"]
+        elif 'where' in question_text:
+            wrong_answers = ["New York", "Philadelphia", "Boston"]
+        else:
+            wrong_answers = ["the states", "the people", "the courts"]
+    
+    # Add wrong answers
+    for wrong in wrong_answers:
         if wrong.lower() != correct_answer.lower() and len(options) < 4:
             options.append(wrong)
     
-    # If still need more options, add from general pool
+    # If we still need more options, add generic ones
     if len(options) < 4:
-        for wrong in wrong_answers_pool['general']:
-            if wrong.lower() != correct_answer.lower() and wrong not in options and len(options) < 4:
-                options.append(wrong)
-    
-    # If still need more, add some generic options
-    generic_options = ['the states', 'the people', 'the government', 'the courts', 'the military']
-    for option in generic_options:
-        if option.lower() != correct_answer.lower() and option not in options and len(options) < 4:
-            options.append(option)
+        generic_options = ["the government", "the military", "the courts", "the states"]
+        for option in generic_options:
+            if option.lower() != correct_answer.lower() and option not in options and len(options) < 4:
+                options.append(option)
     
     # Shuffle the options so correct answer isn't always first
     random.shuffle(options)
