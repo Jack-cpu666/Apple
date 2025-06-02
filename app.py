@@ -4,6 +4,9 @@ import random
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-change-this'
 
+# Add enumerate to Jinja2 environment
+app.jinja_env.globals.update(enumerate=enumerate)
+
 # All 100 civics questions and answers from the official USCIS study guide
 CIVICS_QUESTIONS = {
     1: {
@@ -543,7 +546,10 @@ HTML_TEMPLATE = '''
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>U.S. Naturalization Test Practice</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        
         * {
             margin: 0;
             padding: 0;
@@ -551,223 +557,501 @@ HTML_TEMPLATE = '''
         }
         
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             padding: 20px;
+            position: relative;
+            overflow-x: hidden;
+        }
+        
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="50" cy="50" r="1" fill="rgba(255,255,255,0.1)"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>');
+            pointer-events: none;
+            z-index: -1;
+        }
+        
+        .stars {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: -1;
+        }
+        
+        .star {
+            position: absolute;
+            color: rgba(255, 255, 255, 0.8);
+            animation: twinkle 3s infinite;
+        }
+        
+        @keyframes twinkle {
+            0%, 100% { opacity: 0.3; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.2); }
         }
         
         .container {
-            max-width: 900px;
+            max-width: 1000px;
             margin: 0 auto;
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 24px;
+            box-shadow: 0 25px 60px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.2);
             overflow: hidden;
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255,255,255,0.2);
         }
         
         .header {
-            background: linear-gradient(45deg, #c41e3a, #003366);
+            background: linear-gradient(135deg, #1e3c72 0%, #c41e3a 50%, #003366 100%);
             color: white;
-            padding: 30px;
+            padding: 40px;
             text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+            animation: shimmer 6s infinite;
+        }
+        
+        @keyframes shimmer {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
         
         .header h1 {
-            font-size: 2.5em;
+            font-size: 3em;
             margin-bottom: 10px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            text-shadow: 2px 2px 8px rgba(0,0,0,0.5);
+            font-weight: 700;
+            position: relative;
+            z-index: 1;
         }
         
         .header p {
-            font-size: 1.2em;
-            opacity: 0.9;
+            font-size: 1.3em;
+            opacity: 0.95;
+            font-weight: 500;
+            position: relative;
+            z-index: 1;
         }
         
         .content {
-            padding: 40px;
+            padding: 50px;
         }
         
         .test-section {
             margin-bottom: 40px;
-            padding: 30px;
-            border: 2px solid #e0e0e0;
-            border-radius: 10px;
-            background: #f9f9f9;
+            padding: 40px;
+            border: none;
+            border-radius: 20px;
+            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            position: relative;
+        }
+        
+        .test-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #c41e3a, #003366, #c41e3a);
+            border-radius: 20px 20px 0 0;
         }
         
         .test-section h2 {
-            color: #003366;
-            margin-bottom: 20px;
-            font-size: 1.8em;
-            border-bottom: 3px solid #c41e3a;
-            padding-bottom: 10px;
+            color: #1e293b;
+            margin-bottom: 30px;
+            font-size: 2.2em;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 15px;
         }
         
-        .question {
+        .question-card {
             background: white;
-            padding: 25px;
-            margin: 20px 0;
-            border-radius: 8px;
-            border-left: 5px solid #c41e3a;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        
-        .question h3 {
-            color: #003366;
-            margin-bottom: 15px;
-            font-size: 1.3em;
-        }
-        
-        .options {
-            display: grid;
-            gap: 10px;
-            margin-top: 15px;
-        }
-        
-        .option {
-            padding: 12px 20px;
-            background: #f0f8ff;
-            border: 2px solid #ddd;
-            border-radius: 8px;
-            cursor: pointer;
+            padding: 40px;
+            margin: 30px 0;
+            border-radius: 16px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+            border: 1px solid rgba(0,0,0,0.05);
             transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
         }
         
-        .option:hover {
-            background: #e6f3ff;
-            border-color: #4a90e2;
-            transform: translateY(-2px);
-        }
-        
-        .option input[type="radio"] {
-            margin-right: 10px;
-        }
-        
-        .english-test {
-            background: #f0f8ff;
-            padding: 25px;
-            margin: 20px 0;
-            border-radius: 8px;
-            border: 2px solid #4a90e2;
-        }
-        
-        .sentence-option {
-            background: white;
-            padding: 15px;
-            margin: 10px 0;
-            border-radius: 5px;
-            border: 1px solid #ddd;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        
-        .sentence-option:hover {
-            background: #f0f8ff;
-            border-color: #4a90e2;
-        }
-        
-        .writing-area {
+        .question-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
             width: 100%;
-            height: 120px;
-            padding: 15px;
-            border: 2px solid #ddd;
-            border-radius: 8px;
-            font-size: 16px;
-            font-family: 'Courier New', monospace;
-            resize: vertical;
+            height: 6px;
+            background: linear-gradient(90deg, #c41e3a, #003366);
+        }
+        
+        .question-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.15);
+        }
+        
+        .question-number {
+            display: inline-block;
+            background: linear-gradient(135deg, #c41e3a, #e74c3c);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 0.9em;
+            margin-bottom: 20px;
+        }
+        
+        .question-text {
+            font-size: 1.4em;
+            color: #1e293b;
+            margin-bottom: 30px;
+            line-height: 1.6;
+            font-weight: 500;
+        }
+        
+        .answers-grid {
+            display: grid;
+            gap: 15px;
+            margin-top: 25px;
+        }
+        
+        .answer-option {
+            padding: 20px 25px;
+            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 1.1em;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .answer-option::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(196, 30, 58, 0.1), transparent);
+            transition: left 0.5s ease;
+        }
+        
+        .answer-option:hover {
+            background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
+            border-color: #c41e3a;
+            transform: translateX(5px);
+            box-shadow: 0 5px 15px rgba(196, 30, 58, 0.2);
+        }
+        
+        .answer-option:hover::before {
+            left: 100%;
+        }
+        
+        .answer-letter {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 35px;
+            height: 35px;
+            background: linear-gradient(135deg, #c41e3a, #e74c3c);
+            color: white;
+            border-radius: 50%;
+            font-weight: 700;
+            font-size: 1em;
         }
         
         .btn {
-            background: linear-gradient(45deg, #c41e3a, #e74c3c);
+            background: linear-gradient(135deg, #c41e3a 0%, #e74c3c 100%);
             color: white;
-            padding: 15px 30px;
+            padding: 18px 35px;
             border: none;
-            border-radius: 8px;
-            font-size: 1.1em;
+            border-radius: 12px;
+            font-size: 1.2em;
+            font-weight: 600;
             cursor: pointer;
             transition: all 0.3s ease;
-            margin: 10px 5px;
+            margin: 15px 10px;
             text-decoration: none;
-            display: inline-block;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 6px 20px rgba(196, 30, 58, 0.3);
         }
         
         .btn:hover {
-            background: linear-gradient(45deg, #a91729, #c0392b);
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            background: linear-gradient(135deg, #a91729 0%, #c0392b 100%);
+            transform: translateY(-3px);
+            box-shadow: 0 10px 30px rgba(196, 30, 58, 0.4);
         }
         
         .btn-secondary {
-            background: linear-gradient(45deg, #003366, #2a5298);
+            background: linear-gradient(135deg, #003366 0%, #2a5298 100%);
+            box-shadow: 0 6px 20px rgba(0, 51, 102, 0.3);
         }
         
         .btn-secondary:hover {
-            background: linear-gradient(45deg, #002244, #1e3c72);
+            background: linear-gradient(135deg, #002244 0%, #1e3c72 100%);
+            box-shadow: 0 10px 30px rgba(0, 51, 102, 0.4);
         }
         
-        .result {
+        .progress-container {
+            margin: 30px 0;
+            background: rgba(255,255,255,0.8);
+            padding: 25px;
+            border-radius: 16px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .progress-text {
+            font-weight: 600;
+            color: #1e293b;
+            font-size: 1.1em;
+        }
+        
+        .progress-bar-container {
+            background: #e2e8f0;
+            border-radius: 25px;
+            height: 12px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .progress-bar {
+            background: linear-gradient(90deg, #c41e3a, #e74c3c);
+            height: 100%;
+            transition: width 0.6s ease;
+            border-radius: 25px;
+            position: relative;
+        }
+        
+        .progress-bar::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            animation: progressShine 2s infinite;
+        }
+        
+        @keyframes progressShine {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        .feedback {
+            margin-top: 30px;
             padding: 30px;
-            margin: 20px 0;
-            border-radius: 10px;
+            border-radius: 16px;
             text-align: center;
             font-size: 1.2em;
+            font-weight: 600;
+            animation: slideIn 0.5s ease;
+            position: relative;
+            overflow: hidden;
         }
         
-        .result.pass {
-            background: #d4edda;
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .feedback.correct {
+            background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
             border: 2px solid #28a745;
             color: #155724;
         }
         
-        .result.fail {
-            background: #f8d7da;
+        .feedback.incorrect {
+            background: linear-gradient(135deg, #f8d7da 0%, #f1c2c6 100%);
             border: 2px solid #dc3545;
             color: #721c24;
         }
         
-        .score {
+        .feedback::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            animation: feedbackShine 2s ease-in-out;
+        }
+        
+        @keyframes feedbackShine {
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
+        
+        .feedback-icon {
             font-size: 2em;
-            font-weight: bold;
-            margin: 15px 0;
+            margin-bottom: 15px;
+            display: block;
         }
         
-        .instructions {
-            background: #fff3cd;
-            border: 2px solid #ffc107;
-            color: #856404;
+        .correct-answer {
+            background: rgba(40, 167, 69, 0.1);
+            border: 2px solid #28a745;
+            color: #155724;
             padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 25px;
+            border-radius: 12px;
+            margin-top: 20px;
+            font-weight: 600;
         }
         
-        .instructions h3 {
-            margin-bottom: 10px;
-            color: #b8860b;
+        .home-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin-top: 40px;
+        }
+        
+        .home-card {
+            background: white;
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            text-align: center;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .home-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 6px;
+            background: linear-gradient(90deg, #c41e3a, #003366);
+        }
+        
+        .home-card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 20px 50px rgba(0,0,0,0.2);
+        }
+        
+        .home-card-icon {
+            font-size: 3em;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #c41e3a, #003366);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .home-card h3 {
+            font-size: 1.5em;
+            margin-bottom: 15px;
+            color: #1e293b;
+            font-weight: 700;
+        }
+        
+        .home-card p {
+            color: #64748b;
+            margin-bottom: 25px;
+            line-height: 1.6;
+        }
+        
+        .final-score {
+            text-align: center;
+            padding: 50px;
+            background: white;
+            border-radius: 20px;
+            margin: 30px 0;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.1);
+        }
+        
+        .score-circle {
+            width: 150px;
+            height: 150px;
+            border-radius: 50%;
+            margin: 0 auto 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.5em;
+            font-weight: 700;
+            color: white;
+        }
+        
+        .score-circle.pass {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            box-shadow: 0 10px 30px rgba(40, 167, 69, 0.3);
+        }
+        
+        .score-circle.fail {
+            background: linear-gradient(135deg, #dc3545, #e74c3c);
+            box-shadow: 0 10px 30px rgba(220, 53, 69, 0.3);
         }
         
         .flag-decoration {
             text-align: center;
-            margin: 20px 0;
-            font-size: 2em;
+            margin: 30px 0;
+            font-size: 2.5em;
+            animation: wave 2s ease-in-out infinite;
         }
         
-        .progress {
-            background: #e0e0e0;
-            border-radius: 20px;
-            height: 10px;
-            margin: 20px 0;
-            overflow: hidden;
+        @keyframes wave {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
         }
         
-        .progress-bar {
-            background: linear-gradient(45deg, #c41e3a, #e74c3c);
-            height: 100%;
-            transition: width 0.3s ease;
+        @media (max-width: 768px) {
+            .content { padding: 25px; }
+            .header h1 { font-size: 2em; }
+            .question-text { font-size: 1.2em; }
+            .home-cards { grid-template-columns: 1fr; }
         }
     </style>
 </head>
 <body>
+    <div class="stars">
+        <i class="fas fa-star star" style="top: 10%; left: 15%; animation-delay: 0s;"></i>
+        <i class="fas fa-star star" style="top: 20%; left: 80%; animation-delay: 0.5s;"></i>
+        <i class="fas fa-star star" style="top: 60%; left: 10%; animation-delay: 1s;"></i>
+        <i class="fas fa-star star" style="top: 80%; left: 75%; animation-delay: 1.5s;"></i>
+        <i class="fas fa-star star" style="top: 30%; left: 90%; animation-delay: 2s;"></i>
+    </div>
     <div class="container">
         <div class="header">
             <h1>🇺🇸 U.S. Naturalization Test</h1>
@@ -775,156 +1059,254 @@ HTML_TEMPLATE = '''
         </div>
         
         <div class="content">
+                <div class="container">
+        <div class="header">
+            <h1><i class="fas fa-flag-usa"></i> U.S. Naturalization Test</h1>
+            <p>Official Practice Test - USCIS Civics & English</p>
+        </div>
+        
+        <div class="content">
             {% if page == 'home' %}
             <div class="test-section">
-                <h2>🏛️ Welcome to the Naturalization Test Practice</h2>
-                <div class="instructions">
-                    <h3>Test Requirements:</h3>
-                    <ul style="margin-left: 20px; margin-top: 10px;">
+                <h2><i class="fas fa-home"></i> Welcome to Your Citizenship Journey</h2>
+                <div style="background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%); border: 2px solid #ffc107; color: #856404; padding: 25px; border-radius: 16px; margin-bottom: 30px;">
+                    <h3 style="margin-bottom: 15px; color: #b8860b;"><i class="fas fa-info-circle"></i> Test Requirements:</h3>
+                    <ul style="margin-left: 20px; margin-top: 10px; line-height: 1.8;">
                         <li><strong>Civics Test:</strong> Answer 6 out of 10 questions correctly</li>
                         <li><strong>English Reading:</strong> Read 1 out of 3 sentences correctly</li>
                         <li><strong>English Writing:</strong> Write 1 out of 3 sentences correctly</li>
+                        <li><strong>Speaking:</strong> Demonstrated during the interview</li>
                     </ul>
                 </div>
+                
                 <div class="flag-decoration">🗽⭐🦅⭐🗽</div>
-                <div style="text-align: center;">
-                    <a href="/civics" class="btn">Start Civics Test</a>
-                    <a href="/english" class="btn btn-secondary">Start English Test</a>
+                
+                <div class="home-cards">
+                    <div class="home-card">
+                        <div class="home-card-icon">
+                            <i class="fas fa-landmark"></i>
+                        </div>
+                        <h3>Civics Test</h3>
+                        <p>Test your knowledge of U.S. history and government with official USCIS questions</p>
+                        <a href="/civics" class="btn">
+                            <i class="fas fa-play"></i> Start Civics Test
+                        </a>
+                    </div>
+                    
+                    <div class="home-card">
+                        <div class="home-card-icon">
+                            <i class="fas fa-book"></i>
+                        </div>
+                        <h3>English Test</h3>
+                        <p>Practice reading and writing with official vocabulary from the naturalization test</p>
+                        <a href="/english" class="btn btn-secondary">
+                            <i class="fas fa-language"></i> Start English Test
+                        </a>
+                    </div>
                 </div>
             </div>
             {% endif %}
             
-            {% if page == 'civics' %}
-            <form method="POST">
-                <div class="test-section">
-                    <h2>📚 Civics Test (History and Government)</h2>
-                    <div class="instructions">
-                        <p><strong>Instructions:</strong> Answer all 10 questions. You need 6 correct answers to pass.</p>
+            {% if page == 'civics_question' %}
+            <div class="test-section">
+                <h2><i class="fas fa-landmark"></i> Civics Test</h2>
+                
+                <div class="progress-container">
+                    <div class="progress-header">
+                        <span class="progress-text">Question {{ current_question + 1 }} of 10</span>
+                        <span class="progress-text">Score: {{ score }}/{{ current_question }}</span>
                     </div>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" style="width: {{ (current_question / 10) * 100 }}%"></div>
+                    </div>
+                </div>
+                
+                <div class="question-card">
+                    <div class="question-number">Question {{ current_question + 1 }}</div>
+                    <div class="question-text">{{ question.question }}</div>
                     
-                    {% for i in range(questions|length) %}
-                    <div class="question">
-                        <h3>Question {{ i + 1 }}:</h3>
-                        <p style="font-size: 1.1em; margin-bottom: 15px;">{{ questions[i].question }}</p>
-                        <div class="options">
-                            {% for answer in questions[i].answers %}
-                            <label class="option">
-                                <input type="radio" name="q{{ i }}" value="{{ answer }}" required>
-                                {{ answer }}
+                    <form method="POST" id="answerForm">
+                        <div class="answers-grid">
+                            {% for i, answer in enumerate(question.answers) %}
+                            <label class="answer-option" onclick="submitAnswer('{{ answer }}')">
+                                <span class="answer-letter">{{ 'ABCDEFGHIJ'[i] }}</span>
+                                <span>{{ answer }}</span>
                             </label>
                             {% endfor %}
                         </div>
-                    </div>
-                    {% endfor %}
-                    
-                    <div style="text-align: center; margin-top: 30px;">
-                        <button type="submit" class="btn">Submit Civics Test</button>
-                        <a href="/" class="btn btn-secondary">Back to Home</a>
-                    </div>
-                </div>
-            </form>
-            {% endif %}
-            
-            {% if page == 'english' %}
-            <form method="POST">
-                <div class="test-section">
-                    <h2>📖 English Test</h2>
-                    
-                    <div class="english-test">
-                        <h3>Reading Test</h3>
-                        <div class="instructions">
-                            <p><strong>Instructions:</strong> Choose one sentence and read it aloud correctly. Select the sentence you can read best.</p>
-                        </div>
-                        {% for sentence in reading_sentences %}
-                        <label class="sentence-option">
-                            <input type="radio" name="reading" value="{{ sentence }}" required>
-                            {{ sentence }}
-                        </label>
-                        {% endfor %}
-                    </div>
-                    
-                    <div class="english-test">
-                        <h3>Writing Test</h3>
-                        <div class="instructions">
-                            <p><strong>Instructions:</strong> Choose one sentence and write it exactly in the text area below.</p>
-                        </div>
-                        {% for sentence in writing_sentences %}
-                        <label class="sentence-option">
-                            <input type="radio" name="writing_choice" value="{{ sentence }}" required onclick="document.getElementById('writing_text').placeholder='Write: ' + this.value">
-                            {{ sentence }}
-                        </label>
-                        {% endfor %}
-                        <textarea id="writing_text" name="writing_text" class="writing-area" placeholder="Select a sentence above, then write it here exactly as shown..." required></textarea>
-                    </div>
-                    
-                    <div style="text-align: center; margin-top: 30px;">
-                        <button type="submit" class="btn">Submit English Test</button>
-                        <a href="/" class="btn btn-secondary">Back to Home</a>
-                    </div>
-                </div>
-            </form>
-            {% endif %}
-            
-            {% if page == 'civics_result' %}
-            <div class="test-section">
-                <h2>📊 Civics Test Results</h2>
-                <div class="result {{ 'pass' if passed else 'fail' }}">
-                    <div class="score">{{ score }}/10</div>
-                    <h3>{{ 'PASSED! 🎉' if passed else 'FAILED 😔' }}</h3>
-                    <p>{{ 'Congratulations! You answered enough questions correctly.' if passed else 'You need to answer at least 6 questions correctly to pass.' }}</p>
+                        <input type="hidden" name="answer" id="selectedAnswer">
+                    </form>
                 </div>
                 
-                <div style="background: white; padding: 25px; border-radius: 8px; margin: 20px 0;">
-                    <h3 style="color: #003366; margin-bottom: 15px;">Review Your Answers:</h3>
-                    {% for i in range(results|length) %}
-                    <div style="margin: 15px 0; padding: 15px; border-left: 4px solid {{ '#28a745' if results[i].correct else '#dc3545' }}; background: {{ '#f8f9fa' if results[i].correct else '#fff5f5' }};">
-                        <p><strong>Q{{ i + 1 }}:</strong> {{ results[i].question }}</p>
-                        <p><strong>Your Answer:</strong> {{ results[i].user_answer }}</p>
-                        <p><strong>Correct Answer:</strong> {{ results[i].correct_answer }}</p>
-                        <p style="color: {{ '#28a745' if results[i].correct else '#dc3545' }}; font-weight: bold;">
-                            {{ '✓ Correct' if results[i].correct else '✗ Incorrect' }}
+                {% if feedback %}
+                <div class="feedback {{ 'correct' if feedback.correct else 'incorrect' }}">
+                    <span class="feedback-icon">{{ '🎉' if feedback.correct else '❌' }}</span>
+                    <div>{{ 'Correct!' if feedback.correct else 'Incorrect!' }}</div>
+                    {% if not feedback.correct %}
+                    <div class="correct-answer">
+                        <strong>Correct Answer:</strong> {{ feedback.correct_answer }}
+                    </div>
+                    {% endif %}
+                    
+                    <div style="margin-top: 25px;">
+                        {% if current_question < 9 %}
+                        <a href="/civics/{{ current_question + 1 }}" class="btn">
+                            <i class="fas fa-arrow-right"></i> Next Question
+                        </a>
+                        {% else %}
+                        <a href="/civics/results" class="btn">
+                            <i class="fas fa-flag-checkered"></i> View Results
+                        </a>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+                
+                <div style="text-align: center; margin-top: 30px;">
+                    <a href="/" class="btn btn-secondary">
+                        <i class="fas fa-home"></i> Back to Home
+                    </a>
+                </div>
+            </div>
+            {% endif %}
+            
+            {% if page == 'civics_results' %}
+            <div class="test-section">
+                <h2><i class="fas fa-trophy"></i> Civics Test Results</h2>
+                
+                <div class="final-score">
+                    <div class="score-circle {{ 'pass' if passed else 'fail' }}">
+                        {{ score }}/10
+                    </div>
+                    <h3 style="font-size: 2em; margin-bottom: 15px; color: {{ '#28a745' if passed else '#dc3545' }};">
+                        {{ 'PASSED! 🎉' if passed else 'FAILED 😔' }}
+                    </h3>
+                    <p style="font-size: 1.3em; color: #64748b;">
+                        {{ 'Congratulations! You answered enough questions correctly to pass the civics test.' if passed else 'You need to answer at least 6 questions correctly to pass. Keep studying and try again!' }}
+                    </p>
+                </div>
+                
+                <div style="background: white; padding: 30px; border-radius: 16px; margin: 30px 0; box-shadow: 0 8px 25px rgba(0,0,0,0.1);">
+                    <h3 style="color: #1e293b; margin-bottom: 25px; font-size: 1.5em;">
+                        <i class="fas fa-clipboard-list"></i> Detailed Review
+                    </h3>
+                    {% for i, result in enumerate(results) %}
+                    <div style="margin: 20px 0; padding: 20px; border-left: 4px solid {{ '#28a745' if result.correct else '#dc3545' }}; background: {{ '#f8f9fa' if result.correct else '#fff5f5' }}; border-radius: 8px;">
+                        <p style="font-weight: 600; margin-bottom: 10px;"><strong>Q{{ i + 1 }}:</strong> {{ result.question }}</p>
+                        <p style="margin-bottom: 8px;"><strong>Your Answer:</strong> {{ result.user_answer }}</p>
+                        <p style="margin-bottom: 8px;"><strong>Correct Answer:</strong> {{ result.correct_answer }}</p>
+                        <p style="color: {{ '#28a745' if result.correct else '#dc3545' }}; font-weight: bold;">
+                            {{ '✓ Correct' if result.correct else '✗ Incorrect' }}
                         </p>
                     </div>
                     {% endfor %}
                 </div>
                 
                 <div style="text-align: center;">
-                    <a href="/civics" class="btn">Take Test Again</a>
-                    <a href="/" class="btn btn-secondary">Back to Home</a>
+                    <a href="/civics" class="btn">
+                        <i class="fas fa-redo"></i> Take Test Again
+                    </a>
+                    <a href="/" class="btn btn-secondary">
+                        <i class="fas fa-home"></i> Back to Home
+                    </a>
                 </div>
             </div>
             {% endif %}
             
+            {% if page == 'english' %}
+            <form method="POST">
+                <div class="test-section">
+                    <h2><i class="fas fa-book"></i> English Test</h2>
+                    
+                    <div class="question-card">
+                        <h3><i class="fas fa-eye"></i> Reading Test</h3>
+                        <div style="background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); border: 2px solid #2196f3; color: #0d47a1; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+                            <p><strong>Instructions:</strong> Choose one sentence and read it aloud correctly. Select the sentence you can read best.</p>
+                        </div>
+                        {% for sentence in reading_sentences %}
+                        <label class="answer-option" style="margin-bottom: 10px;">
+                            <input type="radio" name="reading" value="{{ sentence }}" required style="margin-right: 15px;">
+                            <span style="font-size: 1.1em;">{{ sentence }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                    
+                    <div class="question-card">
+                        <h3><i class="fas fa-pencil-alt"></i> Writing Test</h3>
+                        <div style="background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%); border: 2px solid #4caf50; color: #1b5e20; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+                            <p><strong>Instructions:</strong> Choose one sentence and write it exactly in the text area below.</p>
+                        </div>
+                        {% for sentence in writing_sentences %}
+                        <label class="answer-option" style="margin-bottom: 10px;">
+                            <input type="radio" name="writing_choice" value="{{ sentence }}" required onclick="document.getElementById('writing_text').placeholder='Write: ' + this.value" style="margin-right: 15px;">
+                            <span style="font-size: 1.1em;">{{ sentence }}</span>
+                        </label>
+                        {% endfor %}
+                        <textarea id="writing_text" name="writing_text" style="width: 100%; height: 120px; padding: 15px; border: 2px solid #ddd; border-radius: 12px; font-size: 16px; font-family: 'Inter', sans-serif; margin-top: 20px; resize: vertical;" placeholder="Select a sentence above, then write it here exactly as shown..." required></textarea>
+                    </div>
+                    
+                    <div style="text-align: center; margin-top: 30px;">
+                        <button type="submit" class="btn">
+                            <i class="fas fa-check"></i> Submit English Test
+                        </button>
+                        <a href="/" class="btn btn-secondary">
+                            <i class="fas fa-home"></i> Back to Home
+                        </a>
+                    </div>
+                </div>
+            </form>
+            {% endif %}
+            
             {% if page == 'english_result' %}
             <div class="test-section">
-                <h2>📝 English Test Results</h2>
+                <h2><i class="fas fa-chart-line"></i> English Test Results</h2>
                 
-                <div class="result {{ 'pass' if reading_passed else 'fail' }}">
-                    <h3>Reading Test: {{ 'PASSED! ✓' if reading_passed else 'FAILED ✗' }}</h3>
+                <div class="feedback {{ 'correct' if reading_passed else 'incorrect' }}" style="margin-bottom: 25px;">
+                    <span class="feedback-icon">{{ '📖✓' if reading_passed else '📖✗' }}</span>
+                    <h3>Reading Test: {{ 'PASSED!' if reading_passed else 'FAILED' }}</h3>
                     <p><strong>Selected Sentence:</strong> {{ reading_sentence }}</p>
                     <p>{{ 'You successfully selected a sentence to read!' if reading_passed else 'Please practice reading the vocabulary.' }}</p>
                 </div>
                 
-                <div class="result {{ 'pass' if writing_passed else 'fail' }}">
-                    <h3>Writing Test: {{ 'PASSED! ✓' if writing_passed else 'FAILED ✗' }}</h3>
+                <div class="feedback {{ 'correct' if writing_passed else 'incorrect' }}" style="margin-bottom: 25px;">
+                    <span class="feedback-icon">{{ '✍️✓' if writing_passed else '✍️✗' }}</span>
+                    <h3>Writing Test: {{ 'PASSED!' if writing_passed else 'FAILED' }}</h3>
                     <p><strong>Target Sentence:</strong> {{ writing_target }}</p>
                     <p><strong>Your Writing:</strong> {{ writing_response }}</p>
                     <p>{{ 'Perfect! You wrote the sentence correctly.' if writing_passed else 'The sentence does not match exactly. Please try again.' }}</p>
                 </div>
                 
-                <div class="result {{ 'pass' if overall_passed else 'fail' }}">
-                    <div class="score">Overall: {{ 'PASSED' if overall_passed else 'FAILED' }}</div>
-                    <p>{{ 'Congratulations! You passed both English components.' if overall_passed else 'You must pass both reading and writing to complete the English test.' }}</p>
+                <div class="final-score">
+                    <div class="score-circle {{ 'pass' if overall_passed else 'fail' }}">
+                        {{ 'PASS' if overall_passed else 'FAIL' }}
+                    </div>
+                    <h3 style="font-size: 2em; margin-bottom: 15px; color: {{ '#28a745' if overall_passed else '#dc3545' }};">
+                        Overall: {{ 'PASSED! 🎉' if overall_passed else 'FAILED 😔' }}
+                    </h3>
+                    <p style="font-size: 1.3em; color: #64748b;">
+                        {{ 'Congratulations! You passed both English components.' if overall_passed else 'You must pass both reading and writing to complete the English test.' }}
+                    </p>
                 </div>
                 
                 <div style="text-align: center;">
-                    <a href="/english" class="btn">Take Test Again</a>
-                    <a href="/" class="btn btn-secondary">Back to Home</a>
+                    <a href="/english" class="btn">
+                        <i class="fas fa-redo"></i> Take Test Again
+                    </a>
+                    <a href="/" class="btn btn-secondary">
+                        <i class="fas fa-home"></i> Back to Home
+                    </a>
                 </div>
             </div>
             {% endif %}
         </div>
     </div>
+    
+    <script>
+        function submitAnswer(answer) {
+            document.getElementById('selectedAnswer').value = answer;
+            document.getElementById('answerForm').submit();
+        }
+    </script>
 </body>
 </html>
 '''
@@ -933,57 +1315,81 @@ HTML_TEMPLATE = '''
 def home():
     return render_template_string(HTML_TEMPLATE, page='home')
 
-@app.route('/civics', methods=['GET', 'POST'])
-def civics_test():
-    if request.method == 'GET':
-        # Select 10 random questions
-        question_numbers = random.sample(range(1, 101), 10)
-        session['test_questions'] = question_numbers
-        
-        questions = []
-        for num in question_numbers:
-            q = CIVICS_QUESTIONS[num]
-            # Shuffle answers and add some wrong options for multiple choice
-            questions.append({
-                'number': num,
-                'question': q['question'],
-                'answers': q['answers'][:4] if len(q['answers']) > 3 else q['answers'],  # Limit to 4 options
-                'correct': q['correct']
-            })
-        
-        return render_template_string(HTML_TEMPLATE, page='civics', questions=questions)
+@app.route('/civics')
+def start_civics_test():
+    # Reset test session
+    session['test_questions'] = random.sample(range(1, 101), 10)
+    session['current_question'] = 0
+    session['score'] = 0
+    session['answers'] = []
+    return redirect('/civics/0')
+
+@app.route('/civics/<int:question_num>', methods=['GET', 'POST'])
+def civics_question(question_num):
+    if 'test_questions' not in session:
+        return redirect('/civics')
     
-    else:
-        # Grade the test
-        question_numbers = session.get('test_questions', [])
-        score = 0
-        results = []
+    if question_num >= 10:
+        return redirect('/civics/results')
+    
+    question_id = session['test_questions'][question_num]
+    question = CIVICS_QUESTIONS[question_id]
+    
+    feedback = None
+    
+    if request.method == 'POST':
+        user_answer = request.form.get('answer', '').strip()
+        correct_answer = question['correct']
         
-        for i, num in enumerate(question_numbers):
-            user_answer = request.form.get(f'q{i}', '').strip()
-            correct_answer = CIVICS_QUESTIONS[num]['correct']
-            question_text = CIVICS_QUESTIONS[num]['question']
-            
-            # Check if answer is correct (case insensitive, flexible matching)
-            is_correct = False
-            for possible_answer in CIVICS_QUESTIONS[num]['answers']:
-                if user_answer.lower().strip() in possible_answer.lower() or possible_answer.lower().strip() in user_answer.lower():
-                    is_correct = True
-                    break
-            
-            if is_correct:
-                score += 1
-            
-            results.append({
-                'question': question_text,
-                'user_answer': user_answer,
-                'correct_answer': correct_answer,
-                'correct': is_correct
-            })
+        # Check if answer is correct (flexible matching)
+        is_correct = False
+        for possible_answer in question['answers']:
+            if (user_answer.lower().strip() in possible_answer.lower() or 
+                possible_answer.lower().strip() in user_answer.lower() or
+                user_answer.lower().strip() == possible_answer.lower().strip()):
+                is_correct = True
+                break
         
-        passed = score >= 6
-        return render_template_string(HTML_TEMPLATE, page='civics_result', 
-                                    score=score, passed=passed, results=results)
+        if is_correct:
+            session['score'] = session.get('score', 0) + 1
+        
+        # Store the answer
+        session['answers'] = session.get('answers', [])
+        session['answers'].append({
+            'question': question['question'],
+            'user_answer': user_answer,
+            'correct_answer': correct_answer,
+            'correct': is_correct,
+            'question_id': question_id
+        })
+        session['current_question'] = question_num + 1
+        
+        feedback = {
+            'correct': is_correct,
+            'correct_answer': correct_answer
+        }
+    
+    return render_template_string(HTML_TEMPLATE, 
+                                page='civics_question',
+                                question=question,
+                                current_question=question_num,
+                                score=session.get('score', 0),
+                                feedback=feedback)
+
+@app.route('/civics/results')
+def civics_results():
+    if 'answers' not in session:
+        return redirect('/civics')
+    
+    score = session.get('score', 0)
+    passed = score >= 6
+    results = session.get('answers', [])
+    
+    return render_template_string(HTML_TEMPLATE,
+                                page='civics_results',
+                                score=score,
+                                passed=passed,
+                                results=results)
 
 @app.route('/english', methods=['GET', 'POST'])
 def english_test():
@@ -1008,8 +1414,8 @@ def english_test():
         # Reading test: just need to select a sentence
         reading_passed = reading_sentence in session.get('reading_sentences', [])
         
-        # Writing test: must match exactly
-        writing_passed = writing_choice == writing_text
+        # Writing test: must match exactly (case insensitive, but punctuation matters)
+        writing_passed = writing_choice.strip() == writing_text.strip()
         
         overall_passed = reading_passed and writing_passed
         
