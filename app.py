@@ -1,749 +1,539 @@
-from flask import Flask, request, session, jsonify, render_template_string
+from flask import Flask, render_template_string, request, session, redirect, url_for
 import random
-import secrets
 
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(16)
+app.secret_key = 'your-secret-key-change-this'
 
-# ALL 100 CIVICS QUESTIONS
-CIVICS_QUESTIONS = [
-    {
+# All 100 civics questions and answers from the official USCIS study guide
+CIVICS_QUESTIONS = {
+    1: {
         "question": "What is the supreme law of the land?",
-        "options": ["the Constitution", "the Declaration of Independence", "the Bill of Rights", "Federal Laws"],
-        "correct": 0,
-        "explanation": "The Constitution is the supreme law of the land, establishing the framework for government and protecting basic rights."
+        "answers": ["the Constitution"],
+        "correct": "the Constitution"
     },
-    {
+    2: {
         "question": "What does the Constitution do?",
-        "options": ["sets up the government", "declares independence", "lists all federal laws", "creates the military"],
-        "correct": 0,
-        "explanation": "The Constitution sets up the government, defines the government, and protects basic rights of Americans."
+        "answers": ["sets up the government", "defines the government", "protects basic rights of Americans"],
+        "correct": "sets up the government"
     },
-    {
+    3: {
         "question": "The idea of self-government is in the first three words of the Constitution. What are these words?",
-        "options": ["We the People", "In God We Trust", "Life, Liberty, Pursuit", "All Men Created"],
-        "correct": 0,
-        "explanation": "The Constitution begins with 'We the People,' emphasizing that government derives its power from the citizens."
+        "answers": ["We the People"],
+        "correct": "We the People"
     },
-    {
+    4: {
         "question": "What is an amendment?",
-        "options": ["a change (to the Constitution)", "a law", "a court decision", "a presidential order"],
-        "correct": 0,
-        "explanation": "An amendment is a change or addition to the Constitution."
+        "answers": ["a change (to the Constitution)", "an addition (to the Constitution)"],
+        "correct": "a change (to the Constitution)"
     },
-    {
+    5: {
         "question": "What do we call the first ten amendments to the Constitution?",
-        "options": ["the Bill of Rights", "the Articles of Confederation", "the Constitutional Amendments", "the Founding Principles"],
-        "correct": 0,
-        "explanation": "The first ten amendments are called the Bill of Rights, protecting fundamental freedoms."
+        "answers": ["the Bill of Rights"],
+        "correct": "the Bill of Rights"
     },
-    {
+    6: {
         "question": "What is one right or freedom from the First Amendment?",
-        "options": ["speech", "right to bear arms", "right to vote", "right to privacy"],
-        "correct": 0,
-        "explanation": "The First Amendment protects freedom of speech, religion, press, assembly, and petition."
+        "answers": ["speech", "religion", "assembly", "press", "petition the government"],
+        "correct": "speech"
     },
-    {
+    7: {
         "question": "How many amendments does the Constitution have?",
-        "options": ["twenty-seven (27)", "ten (10)", "twenty-five (25)", "thirty-three (33)"],
-        "correct": 0,
-        "explanation": "The Constitution has 27 amendments, including the original Bill of Rights."
+        "answers": ["twenty-seven (27)"],
+        "correct": "twenty-seven"
     },
-    {
+    8: {
         "question": "What did the Declaration of Independence do?",
-        "options": ["announced our independence (from Great Britain)", "created the Constitution", "established the Bill of Rights", "formed the first government"],
-        "correct": 0,
-        "explanation": "The Declaration of Independence announced that the American colonies were free from British control."
+        "answers": ["announced our independence (from Great Britain)", "declared our independence (from Great Britain)", "said that the United States is free (from Great Britain)"],
+        "correct": "announced our independence (from Great Britain)"
     },
-    {
+    9: {
         "question": "What are two rights in the Declaration of Independence?",
-        "options": ["life, liberty", "freedom and justice", "peace and prosperity", "honor and duty"],
-        "correct": 0,
-        "explanation": "The Declaration mentions the rights to life, liberty, and the pursuit of happiness."
+        "answers": ["life", "liberty", "pursuit of happiness"],
+        "correct": "life and liberty"
     },
-    {
+    10: {
         "question": "What is freedom of religion?",
-        "options": ["You can practice any religion, or not practice a religion", "You must practice Christianity", "You cannot practice religion", "You must choose one religion"],
-        "correct": 0,
-        "explanation": "Freedom of religion means you can practice any religion or choose not to practice a religion."
+        "answers": ["You can practice any religion, or not practice a religion."],
+        "correct": "You can practice any religion, or not practice a religion."
     },
-    {
+    11: {
         "question": "What is the economic system in the United States?",
-        "options": ["capitalist economy", "socialist economy", "communist economy", "feudal economy"],
-        "correct": 0,
-        "explanation": "The United States has a capitalist or market economy based on free enterprise."
+        "answers": ["capitalist economy", "market economy"],
+        "correct": "capitalist economy"
     },
-    {
-        "question": "What is the 'rule of law'?",
-        "options": ["Everyone must follow the law", "Only citizens follow laws", "Laws are suggestions", "Leaders make all laws"],
-        "correct": 0,
-        "explanation": "The rule of law means everyone, including leaders and government, must obey the law. No one is above the law."
+    12: {
+        "question": "What is the \"rule of law\"?",
+        "answers": ["Everyone must follow the law.", "Leaders must obey the law.", "Government must obey the law.", "No one is above the law."],
+        "correct": "Everyone must follow the law."
     },
-    {
+    13: {
         "question": "Name one branch or part of the government.",
-        "options": ["Congress", "Federal", "State", "Local"],
-        "correct": 0,
-        "explanation": "The three branches are legislative (Congress), executive (President), and judicial (courts)."
+        "answers": ["Congress", "legislative", "President", "executive", "the courts", "judicial"],
+        "correct": "Congress"
     },
-    {
+    14: {
         "question": "What stops one branch of government from becoming too powerful?",
-        "options": ["checks and balances", "the Constitution", "the President", "Congress"],
-        "correct": 0,
-        "explanation": "Checks and balances and separation of powers ensure each branch can limit the power of the other branches."
+        "answers": ["checks and balances", "separation of powers"],
+        "correct": "checks and balances"
     },
-    {
+    15: {
         "question": "Who is in charge of the executive branch?",
-        "options": ["the President", "Congress", "the Supreme Court", "the Speaker of the House"],
-        "correct": 0,
-        "explanation": "The President leads the executive branch and enforces federal laws."
+        "answers": ["the President"],
+        "correct": "the President"
     },
-    {
+    16: {
         "question": "Who makes federal laws?",
-        "options": ["Congress", "the President", "the Supreme Court", "State governments"],
-        "correct": 0,
-        "explanation": "Congress, consisting of the Senate and House of Representatives, makes federal laws."
+        "answers": ["Congress", "Senate and House (of Representatives)", "(U.S. or national) legislature"],
+        "correct": "Congress"
     },
-    {
+    17: {
         "question": "What are the two parts of the U.S. Congress?",
-        "options": ["the Senate and House (of Representatives)", "Upper and Lower House", "Federal and State Congress", "Democratic and Republican"],
-        "correct": 0,
-        "explanation": "Congress consists of the Senate and the House of Representatives."
+        "answers": ["the Senate and House (of Representatives)"],
+        "correct": "the Senate and House (of Representatives)"
     },
-    {
+    18: {
         "question": "How many U.S. Senators are there?",
-        "options": ["one hundred (100)", "fifty (50)", "four hundred thirty-five (435)", "five hundred thirty-eight (538)"],
-        "correct": 0,
-        "explanation": "There are 100 U.S. Senators - two from each of the 50 states."
+        "answers": ["one hundred (100)"],
+        "correct": "one hundred"
     },
-    {
+    19: {
         "question": "We elect a U.S. Senator for how many years?",
-        "options": ["six (6)", "two (2)", "four (4)", "eight (8)"],
-        "correct": 0,
-        "explanation": "U.S. Senators serve six-year terms."
+        "answers": ["six (6)"],
+        "correct": "six"
     },
-    {
+    20: {
         "question": "Who is one of your state's U.S. Senators now?",
-        "options": ["Answers will vary", "The Governor", "The Mayor", "The President"],
-        "correct": 0,
-        "explanation": "Each state has two U.S. Senators. You should know who represents your state."
+        "answers": ["Answers will vary"],
+        "correct": "Answers will vary"
     },
-    {
+    21: {
         "question": "The House of Representatives has how many voting members?",
-        "options": ["four hundred thirty-five (435)", "one hundred (100)", "five hundred thirty-eight (538)", "three hundred fifty (350)"],
-        "correct": 0,
-        "explanation": "The House of Representatives has 435 voting members, representing districts based on population."
+        "answers": ["four hundred thirty-five (435)"],
+        "correct": "four hundred thirty-five"
     },
-    {
+    22: {
         "question": "We elect a U.S. Representative for how many years?",
-        "options": ["two (2)", "four (4)", "six (6)", "three (3)"],
-        "correct": 0,
-        "explanation": "U.S. Representatives serve two-year terms."
+        "answers": ["two (2)"],
+        "correct": "two"
     },
-    {
+    23: {
         "question": "Name your U.S. Representative.",
-        "options": ["Answers will vary", "The Senator", "The Governor", "The Mayor"],
-        "correct": 0,
-        "explanation": "You should know the name of your U.S. Representative who represents your congressional district."
+        "answers": ["Answers will vary"],
+        "correct": "Answers will vary"
     },
-    {
+    24: {
         "question": "Who does a U.S. Senator represent?",
-        "options": ["all people of the state", "only voters", "only citizens", "only adults"],
-        "correct": 0,
-        "explanation": "A U.S. Senator represents all people living in their state."
+        "answers": ["all people of the state"],
+        "correct": "all people of the state"
     },
-    {
+    25: {
         "question": "Why do some states have more Representatives than other states?",
-        "options": ["(because of) the state's population", "because they are larger", "because they are older", "because they have more money"],
-        "correct": 0,
-        "explanation": "States with larger populations have more Representatives in the House."
+        "answers": ["(because of) the state's population", "(because) they have more people", "(because) some states have more people"],
+        "correct": "because of the state's population"
     },
-    {
+    26: {
         "question": "We elect a President for how many years?",
-        "options": ["four (4)", "two (2)", "six (6)", "eight (8)"],
-        "correct": 0,
-        "explanation": "The President serves a four-year term and can be re-elected once."
+        "answers": ["four (4)"],
+        "correct": "four"
     },
-    {
+    27: {
         "question": "In what month do we vote for President?",
-        "options": ["November", "October", "December", "September"],
-        "correct": 0,
-        "explanation": "Presidential elections are held in November, on the first Tuesday after the first Monday."
+        "answers": ["November"],
+        "correct": "November"
     },
-    {
+    28: {
         "question": "What is the name of the President of the United States now?",
-        "options": ["Visit uscis.gov/citizenship/testupdates", "Donald Trump", "Joe Biden", "Barack Obama"],
-        "correct": 0,
-        "explanation": "Check the USCIS website for the current President's name at the time of your test."
+        "answers": ["Donald Trump"],
+        "correct": "Donald Trump"
     },
-    {
+    29: {
         "question": "What is the name of the Vice President of the United States now?",
-        "options": ["Visit uscis.gov/citizenship/testupdates", "Kamala Harris", "Mike Pence", "Joe Biden"],
-        "correct": 0,
-        "explanation": "Check the USCIS website for the current Vice President's name at the time of your test."
+        "answers": ["J.D. Vance"],
+        "correct": "J.D. Vance"
     },
-    {
+    30: {
         "question": "If the President can no longer serve, who becomes President?",
-        "options": ["the Vice President", "Speaker of the House", "Secretary of State", "Chief Justice"],
-        "correct": 0,
-        "explanation": "The Vice President becomes President if the President cannot serve."
+        "answers": ["the Vice President"],
+        "correct": "the Vice President"
     },
-    {
+    31: {
         "question": "If both the President and the Vice President can no longer serve, who becomes President?",
-        "options": ["the Speaker of the House", "Secretary of State", "Chief Justice", "Senate Majority Leader"],
-        "correct": 0,
-        "explanation": "The Speaker of the House is next in line after the Vice President."
+        "answers": ["the Speaker of the House"],
+        "correct": "the Speaker of the House"
     },
-    {
+    32: {
         "question": "Who is the Commander in Chief of the military?",
-        "options": ["the President", "Secretary of Defense", "Chairman of Joint Chiefs", "General of the Army"],
-        "correct": 0,
-        "explanation": "The President serves as the Commander in Chief of all U.S. armed forces."
+        "answers": ["the President"],
+        "correct": "the President"
     },
-    {
+    33: {
         "question": "Who signs bills to become laws?",
-        "options": ["the President", "Speaker of the House", "Chief Justice", "Senate Majority Leader"],
-        "correct": 0,
-        "explanation": "The President signs bills passed by Congress to make them federal laws."
+        "answers": ["the President"],
+        "correct": "the President"
     },
-    {
+    34: {
         "question": "Who vetoes bills?",
-        "options": ["the President", "Congress", "Supreme Court", "Vice President"],
-        "correct": 0,
-        "explanation": "The President has the power to veto (reject) bills passed by Congress."
+        "answers": ["the President"],
+        "correct": "the President"
     },
-    {
+    35: {
         "question": "What does the President's Cabinet do?",
-        "options": ["advises the President", "makes laws", "interprets laws", "enforces state laws"],
-        "correct": 0,
-        "explanation": "The President's Cabinet consists of department heads who advise the President."
+        "answers": ["advises the President"],
+        "correct": "advises the President"
     },
-    {
+    36: {
         "question": "What are two Cabinet-level positions?",
-        "options": ["Secretary of Defense, Secretary of State", "Speaker and Majority Leader", "Chief Justice and Associate Justice", "Senator and Representative"],
-        "correct": 0,
-        "explanation": "Cabinet positions include Secretary of Defense, State, Treasury, and many others."
+        "answers": ["Secretary of Agriculture", "Secretary of Commerce", "Secretary of Defense", "Secretary of Education", "Secretary of Energy", "Secretary of Health and Human Services", "Secretary of Homeland Security", "Secretary of Housing and Urban Development", "Secretary of the Interior", "Secretary of Labor", "Secretary of State", "Secretary of Transportation", "Secretary of the Treasury", "Secretary of Veterans Affairs", "Attorney General", "Vice President"],
+        "correct": "Secretary of State and Secretary of Defense"
     },
-    {
+    37: {
         "question": "What does the judicial branch do?",
-        "options": ["reviews laws", "makes laws", "enforces laws", "votes on laws"],
-        "correct": 0,
-        "explanation": "The judicial branch reviews laws, explains laws, and decides if laws go against the Constitution."
+        "answers": ["reviews laws", "explains laws", "resolves disputes (disagreements)", "decides if a law goes against the Constitution"],
+        "correct": "reviews laws"
     },
-    {
+    38: {
         "question": "What is the highest court in the United States?",
-        "options": ["the Supreme Court", "Federal Court", "District Court", "Appeals Court"],
-        "correct": 0,
-        "explanation": "The Supreme Court is the highest court and final authority on constitutional questions."
+        "answers": ["the Supreme Court"],
+        "correct": "the Supreme Court"
     },
-    {
+    39: {
         "question": "How many justices are on the Supreme Court?",
-        "options": ["Visit uscis.gov/citizenship/testupdates", "seven (7)", "eight (8)", "ten (10)"],
-        "correct": 0,
-        "explanation": "Check the USCIS website for the current number of Supreme Court justices."
+        "answers": ["nine (9)"],
+        "correct": "nine"
     },
-    {
+    40: {
         "question": "Who is the Chief Justice of the United States now?",
-        "options": ["Visit uscis.gov/citizenship/testupdates", "John Roberts", "Clarence Thomas", "Ruth Bader Ginsburg"],
-        "correct": 0,
-        "explanation": "Check the USCIS website for the current Chief Justice's name."
+        "answers": ["John Roberts"],
+        "correct": "John Roberts"
     },
-    {
+    41: {
         "question": "Under our Constitution, some powers belong to the federal government. What is one power of the federal government?",
-        "options": ["to print money", "to give driver's licenses", "to provide schooling", "to provide police"],
-        "correct": 0,
-        "explanation": "Federal powers include printing money, declaring war, creating an army, and making treaties."
+        "answers": ["to print money", "to declare war", "to create an army", "to make treaties"],
+        "correct": "to print money"
     },
-    {
+    42: {
         "question": "Under our Constitution, some powers belong to the states. What is one power of the states?",
-        "options": ["provide schooling and education", "print money", "declare war", "make treaties"],
-        "correct": 0,
-        "explanation": "State powers include providing education, protection (police), safety (fire departments), driver's licenses, and zoning."
+        "answers": ["provide schooling and education", "provide protection (police)", "provide safety (fire departments)", "give a driver's license", "approve zoning and land use"],
+        "correct": "provide schooling and education"
     },
-    {
+    43: {
         "question": "Who is the Governor of your state now?",
-        "options": ["Answers will vary", "The President", "The Mayor", "The Senator"],
-        "correct": 0,
-        "explanation": "You should know who is the current Governor of your state."
+        "answers": ["Answers will vary"],
+        "correct": "Answers will vary"
     },
-    {
+    44: {
         "question": "What is the capital of your state?",
-        "options": ["Answers will vary", "Washington D.C.", "New York", "Los Angeles"],
-        "correct": 0,
-        "explanation": "You should know the capital city of your state."
+        "answers": ["Answers will vary"],
+        "correct": "Answers will vary"
     },
-    {
+    45: {
         "question": "What are the two major political parties in the United States?",
-        "options": ["Democratic and Republican", "Liberal and Conservative", "Federal and State", "Progressive and Traditional"],
-        "correct": 0,
-        "explanation": "The Democratic and Republican parties are the two major political parties."
+        "answers": ["Democratic and Republican"],
+        "correct": "Democratic and Republican"
     },
-    {
+    46: {
         "question": "What is the political party of the President now?",
-        "options": ["Visit uscis.gov/citizenship/testupdates", "Democratic", "Republican", "Independent"],
-        "correct": 0,
-        "explanation": "Check the USCIS website for the current President's political party."
+        "answers": ["Republican"],
+        "correct": "Republican"
     },
-    {
+    47: {
         "question": "What is the name of the Speaker of the House of Representatives now?",
-        "options": ["Visit uscis.gov/citizenship/testupdates", "Nancy Pelosi", "Kevin McCarthy", "Paul Ryan"],
-        "correct": 0,
-        "explanation": "Check the USCIS website for the current Speaker of the House."
+        "answers": ["Mike Johnson"],
+        "correct": "Mike Johnson"
     },
-    {
+    48: {
         "question": "There are four amendments to the Constitution about who can vote. Describe one of them.",
-        "options": ["Citizens eighteen (18) and older (can vote)", "Only men can vote", "Only property owners can vote", "Only educated people can vote"],
-        "correct": 0,
-        "explanation": "The 26th Amendment allows citizens 18 and older to vote. Other amendments eliminated poll taxes and expanded voting rights."
+        "answers": ["Citizens eighteen (18) and older (can vote).", "You don't have to pay (a poll tax) to vote.", "Any citizen can vote. (Women and men can vote.)", "A male citizen of any race (can vote)."],
+        "correct": "Citizens eighteen (18) and older (can vote)."
     },
-    {
+    49: {
         "question": "What is one responsibility that is only for United States citizens?",
-        "options": ["serve on a jury", "pay taxes", "obey laws", "attend school"],
-        "correct": 0,
-        "explanation": "Only U.S. citizens can serve on juries and vote in federal elections."
+        "answers": ["serve on a jury", "vote in a federal election"],
+        "correct": "serve on a jury"
     },
-    {
+    50: {
         "question": "Name one right only for United States citizens.",
-        "options": ["vote in a federal election", "freedom of speech", "freedom of religion", "right to bear arms"],
-        "correct": 0,
-        "explanation": "Only citizens can vote in federal elections and run for federal office."
+        "answers": ["vote in a federal election", "run for federal office"],
+        "correct": "vote in a federal election"
     },
-    {
+    51: {
         "question": "What are two rights of everyone living in the United States?",
-        "options": ["freedom of expression, freedom of speech", "right to vote, right to run for office", "right to a job, right to housing", "right to free education, right to healthcare"],
-        "correct": 0,
-        "explanation": "Everyone in the U.S. has freedom of expression, speech, assembly, petition, religion, and the right to bear arms."
+        "answers": ["freedom of expression", "freedom of speech", "freedom of assembly", "freedom to petition the government", "freedom of religion", "the right to bear arms"],
+        "correct": "freedom of speech and freedom of religion"
     },
-    {
+    52: {
         "question": "What do we show loyalty to when we say the Pledge of Allegiance?",
-        "options": ["the United States", "the President", "Congress", "the military"],
-        "correct": 0,
-        "explanation": "The Pledge of Allegiance shows loyalty to the United States and the flag."
+        "answers": ["the United States", "the flag"],
+        "correct": "the United States"
     },
-    {
+    53: {
         "question": "What is one promise you make when you become a United States citizen?",
-        "options": ["give up loyalty to other countries", "never leave the United States", "pay higher taxes", "serve in the military for 4 years"],
-        "correct": 0,
-        "explanation": "New citizens promise to give up loyalty to other countries, defend the Constitution, obey laws, and serve the nation if needed."
+        "answers": ["give up loyalty to other countries", "defend the Constitution and laws of the United States", "obey the laws of the United States", "serve in the U.S. military (if needed)", "serve (do important work for) the nation (if needed)", "be loyal to the United States"],
+        "correct": "give up loyalty to other countries"
     },
-    {
+    54: {
         "question": "How old do citizens have to be to vote for President?",
-        "options": ["eighteen (18) and older", "twenty-one (21) and older", "sixteen (16) and older", "twenty-five (25) and older"],
-        "correct": 0,
-        "explanation": "Citizens must be 18 years or older to vote in federal elections."
+        "answers": ["eighteen (18) and older"],
+        "correct": "eighteen"
     },
-    {
+    55: {
         "question": "What are two ways that Americans can participate in their democracy?",
-        "options": ["vote, join a political party", "pay taxes, obey laws", "work, go to school", "drive, own property"],
-        "correct": 0,
-        "explanation": "Americans can participate by voting, joining political parties, campaigning, contacting officials, running for office, and more."
+        "answers": ["vote", "join a political party", "help with a campaign", "join a civic group", "join a community group", "give an elected official your opinion on an issue", "call Senators and Representatives", "publicly support or oppose an issue or policy", "run for office", "write to a newspaper"],
+        "correct": "vote and join a political party"
     },
-    {
+    56: {
         "question": "When is the last day you can send in federal income tax forms?",
-        "options": ["April 15", "March 15", "May 15", "December 31"],
-        "correct": 0,
-        "explanation": "Federal income tax forms are due on April 15th each year."
+        "answers": ["April 15"],
+        "correct": "April 15"
     },
-    {
+    57: {
         "question": "When must all men register for the Selective Service?",
-        "options": ["at age eighteen (18)", "at age twenty-one (21)", "at age sixteen (16)", "when they vote"],
-        "correct": 0,
-        "explanation": "All men must register for Selective Service at age 18, between ages 18 and 26."
+        "answers": ["at age eighteen (18)", "between eighteen (18) and twenty-six (26)"],
+        "correct": "at age eighteen"
     },
-    {
+    58: {
         "question": "What is one reason colonists came to America?",
-        "options": ["freedom", "to escape war", "for better weather", "to find gold"],
-        "correct": 0,
-        "explanation": "Colonists came for freedom, political liberty, religious freedom, economic opportunity, and to escape persecution."
+        "answers": ["freedom", "political liberty", "religious freedom", "economic opportunity", "practice their religion", "escape persecution"],
+        "correct": "freedom"
     },
-    {
+    59: {
         "question": "Who lived in America before the Europeans arrived?",
-        "options": ["American Indians", "Spanish explorers", "French traders", "Russian settlers"],
-        "correct": 0,
-        "explanation": "American Indians (Native Americans) lived in America before European colonization."
+        "answers": ["American Indians", "Native Americans"],
+        "correct": "American Indians"
     },
-    {
+    60: {
         "question": "What group of people was taken to America and sold as slaves?",
-        "options": ["Africans", "Europeans", "Asians", "Native Americans"],
-        "correct": 0,
-        "explanation": "Africans were taken to America and sold as slaves, mainly to work on plantations."
+        "answers": ["Africans", "people from Africa"],
+        "correct": "Africans"
     },
-    {
+    61: {
         "question": "Why did the colonists fight the British?",
-        "options": ["because of high taxes (taxation without representation)", "religious differences", "land disputes", "trade restrictions only"],
-        "correct": 0,
-        "explanation": "Colonists fought because of high taxes, British army staying in their houses, and lack of self-government."
+        "answers": ["because of high taxes (taxation without representation)", "because the British army stayed in their houses (boarding, quartering)", "because they didn't have self-government"],
+        "correct": "because of high taxes"
     },
-    {
+    62: {
         "question": "Who wrote the Declaration of Independence?",
-        "options": ["(Thomas) Jefferson", "George Washington", "Benjamin Franklin", "John Adams"],
-        "correct": 0,
-        "explanation": "Thomas Jefferson was the primary author of the Declaration of Independence."
+        "answers": ["(Thomas) Jefferson"],
+        "correct": "Thomas Jefferson"
     },
-    {
+    63: {
         "question": "When was the Declaration of Independence adopted?",
-        "options": ["July 4, 1776", "July 4, 1775", "May 4, 1776", "September 4, 1776"],
-        "correct": 0,
-        "explanation": "The Declaration of Independence was adopted on July 4, 1776."
+        "answers": ["July 4, 1776"],
+        "correct": "July 4, 1776"
     },
-    {
+    64: {
         "question": "There were 13 original states. Name three.",
-        "options": ["New York, New Jersey, Pennsylvania", "California, Texas, Florida", "Ohio, Michigan, Illinois", "Washington, Oregon, Montana"],
-        "correct": 0,
-        "explanation": "The 13 original states include New Hampshire, Massachusetts, Rhode Island, Connecticut, New York, New Jersey, Pennsylvania, Delaware, Maryland, Virginia, North Carolina, South Carolina, and Georgia."
+        "answers": ["New Hampshire", "Massachusetts", "Rhode Island", "Connecticut", "New York", "New Jersey", "Pennsylvania", "Delaware", "Maryland", "Virginia", "North Carolina", "South Carolina", "Georgia"],
+        "correct": "New York, New Jersey, and Pennsylvania"
     },
-    {
+    65: {
         "question": "What happened at the Constitutional Convention?",
-        "options": ["The Constitution was written", "Independence was declared", "The first President was chosen", "The Bill of Rights was created"],
-        "correct": 0,
-        "explanation": "At the Constitutional Convention in 1787, the Founding Fathers wrote the Constitution."
+        "answers": ["The Constitution was written.", "The Founding Fathers wrote the Constitution."],
+        "correct": "The Constitution was written."
     },
-    {
+    66: {
         "question": "When was the Constitution written?",
-        "options": ["1787", "1776", "1783", "1791"],
-        "correct": 0,
-        "explanation": "The Constitution was written in 1787 during the Constitutional Convention in Philadelphia."
+        "answers": ["1787"],
+        "correct": "1787"
     },
-    {
+    67: {
         "question": "The Federalist Papers supported the passage of the U.S. Constitution. Name one of the writers.",
-        "options": ["(James) Madison", "George Washington", "Thomas Jefferson", "John Hancock"],
-        "correct": 0,
-        "explanation": "The Federalist Papers were written by James Madison, Alexander Hamilton, and John Jay (Publius)."
+        "answers": ["(James) Madison", "(Alexander) Hamilton", "(John) Jay", "Publius"],
+        "correct": "James Madison"
     },
-    {
+    68: {
         "question": "What is one thing Benjamin Franklin is famous for?",
-        "options": ["U.S. diplomat", "First President", "Writing Declaration", "Leading the army"],
-        "correct": 0,
-        "explanation": "Benjamin Franklin was a U.S. diplomat, oldest member of Constitutional Convention, first Postmaster General, writer of Poor Richard's Almanac, and started first free libraries."
+        "answers": ["U.S. diplomat", "oldest member of the Constitutional Convention", "first Postmaster General of the United States", "writer of \"Poor Richard's Almanac\"", "started the first free libraries"],
+        "correct": "U.S. diplomat"
     },
-    {
-        "question": "Who is the 'Father of Our Country'?",
-        "options": ["(George) Washington", "Thomas Jefferson", "Benjamin Franklin", "John Adams"],
-        "correct": 0,
-        "explanation": "George Washington is called the 'Father of Our Country' for his leadership during the Revolution and as first President."
+    69: {
+        "question": "Who is the \"Father of Our Country\"?",
+        "answers": ["(George) Washington"],
+        "correct": "George Washington"
     },
-    {
+    70: {
         "question": "Who was the first President?",
-        "options": ["(George) Washington", "John Adams", "Thomas Jefferson", "Benjamin Franklin"],
-        "correct": 0,
-        "explanation": "George Washington was the first President of the United States (1789-1797)."
+        "answers": ["(George) Washington"],
+        "correct": "George Washington"
     },
-    {
+    71: {
         "question": "What territory did the United States buy from France in 1803?",
-        "options": ["the Louisiana Territory", "Florida Territory", "Oregon Territory", "Texas Territory"],
-        "correct": 0,
-        "explanation": "The Louisiana Purchase in 1803 doubled the size of the United States."
+        "answers": ["the Louisiana Territory", "Louisiana"],
+        "correct": "the Louisiana Territory"
     },
-    {
+    72: {
         "question": "Name one war fought by the United States in the 1800s.",
-        "options": ["War of 1812", "World War I", "World War II", "Korean War"],
-        "correct": 0,
-        "explanation": "Wars in the 1800s include War of 1812, Mexican-American War, Civil War, and Spanish-American War."
+        "answers": ["War of 1812", "Mexican-American War", "Civil War", "Spanish-American War"],
+        "correct": "Civil War"
     },
-    {
+    73: {
         "question": "Name the U.S. war between the North and the South.",
-        "options": ["the Civil War", "Revolutionary War", "War of 1812", "Mexican-American War"],
-        "correct": 0,
-        "explanation": "The Civil War (1861-1865) was fought between the North and South."
+        "answers": ["the Civil War", "the War between the States"],
+        "correct": "the Civil War"
     },
-    {
+    74: {
         "question": "Name one problem that led to the Civil War.",
-        "options": ["slavery", "taxes", "trade", "immigration"],
-        "correct": 0,
-        "explanation": "The Civil War was caused by slavery, economic reasons, and states' rights."
+        "answers": ["slavery", "economic reasons", "states' rights"],
+        "correct": "slavery"
     },
-    {
+    75: {
         "question": "What was one important thing that Abraham Lincoln did?",
-        "options": ["freed the slaves (Emancipation Proclamation)", "wrote the Constitution", "led the Revolutionary War", "bought Louisiana"],
-        "correct": 0,
-        "explanation": "Abraham Lincoln freed the slaves, saved the Union, and led during the Civil War."
+        "answers": ["freed the slaves (Emancipation Proclamation)", "saved (or preserved) the Union", "led the United States during the Civil War"],
+        "correct": "freed the slaves"
     },
-    {
+    76: {
         "question": "What did the Emancipation Proclamation do?",
-        "options": ["freed the slaves", "ended the Civil War", "created new states", "established voting rights"],
-        "correct": 0,
-        "explanation": "The Emancipation Proclamation freed slaves in the Confederacy and Confederate states."
+        "answers": ["freed the slaves", "freed slaves in the Confederacy", "freed slaves in the Confederate states", "freed slaves in most Southern states"],
+        "correct": "freed the slaves"
     },
-    {
+    77: {
         "question": "What did Susan B. Anthony do?",
-        "options": ["fought for women's rights", "was the first female President", "led the Underground Railroad", "founded the Red Cross"],
-        "correct": 0,
-        "explanation": "Susan B. Anthony fought for women's rights and civil rights."
+        "answers": ["fought for women's rights", "fought for civil rights"],
+        "correct": "fought for women's rights"
     },
-    {
+    78: {
         "question": "Name one war fought by the United States in the 1900s.",
-        "options": ["World War I", "Civil War", "Revolutionary War", "War of 1812"],
-        "correct": 0,
-        "explanation": "Wars in the 1900s include World War I, World War II, Korean War, Vietnam War, and Gulf War."
+        "answers": ["World War I", "World War II", "Korean War", "Vietnam War", "(Persian) Gulf War"],
+        "correct": "World War II"
     },
-    {
+    79: {
         "question": "Who was President during World War I?",
-        "options": ["(Woodrow) Wilson", "Theodore Roosevelt", "Franklin Roosevelt", "Harry Truman"],
-        "correct": 0,
-        "explanation": "Woodrow Wilson was President during World War I (1917-1918)."
+        "answers": ["(Woodrow) Wilson"],
+        "correct": "Woodrow Wilson"
     },
-    {
+    80: {
         "question": "Who was President during the Great Depression and World War II?",
-        "options": ["(Franklin) Roosevelt", "Theodore Roosevelt", "Harry Truman", "Dwight Eisenhower"],
-        "correct": 0,
-        "explanation": "Franklin D. Roosevelt was President during the Great Depression and most of World War II."
+        "answers": ["(Franklin) Roosevelt"],
+        "correct": "Franklin Roosevelt"
     },
-    {
+    81: {
         "question": "Who did the United States fight in World War II?",
-        "options": ["Japan, Germany, and Italy", "Russia, China, and Korea", "Britain, France, and Spain", "Mexico, Canada, and Cuba"],
-        "correct": 0,
-        "explanation": "The U.S. fought against the Axis powers: Japan, Germany, and Italy in World War II."
+        "answers": ["Japan, Germany, and Italy"],
+        "correct": "Japan, Germany, and Italy"
     },
-    {
+    82: {
         "question": "Before he was President, Eisenhower was a general. What war was he in?",
-        "options": ["World War II", "World War I", "Korean War", "Vietnam War"],
-        "correct": 0,
-        "explanation": "Dwight Eisenhower was a general in World War II before becoming President."
+        "answers": ["World War II"],
+        "correct": "World War II"
     },
-    {
+    83: {
         "question": "During the Cold War, what was the main concern of the United States?",
-        "options": ["Communism", "Fascism", "Monarchy", "Anarchy"],
-        "correct": 0,
-        "explanation": "During the Cold War, the main U.S. concern was the spread of Communism."
+        "answers": ["Communism"],
+        "correct": "Communism"
     },
-    {
+    84: {
         "question": "What movement tried to end racial discrimination?",
-        "options": ["civil rights (movement)", "labor movement", "suffrage movement", "temperance movement"],
-        "correct": 0,
-        "explanation": "The civil rights movement tried to end racial discrimination."
+        "answers": ["civil rights (movement)"],
+        "correct": "civil rights movement"
     },
-    {
+    85: {
         "question": "What did Martin Luther King, Jr. do?",
-        "options": ["fought for civil rights", "led the Civil War", "was a President", "wrote the Constitution"],
-        "correct": 0,
-        "explanation": "Martin Luther King, Jr. fought for civil rights and worked for equality for all Americans."
+        "answers": ["fought for civil rights", "worked for equality for all Americans"],
+        "correct": "fought for civil rights"
     },
-    {
+    86: {
         "question": "What major event happened on September 11, 2001, in the United States?",
-        "options": ["Terrorists attacked the United States", "The U.S. declared war", "A major earthquake occurred", "The President was inaugurated"],
-        "correct": 0,
-        "explanation": "On September 11, 2001, terrorists attacked the World Trade Center and Pentagon."
+        "answers": ["Terrorists attacked the United States."],
+        "correct": "Terrorists attacked the United States."
     },
-    {
+    87: {
         "question": "Name one American Indian tribe in the United States.",
-        "options": ["Cherokee", "Vikings", "Celts", "Saxons"],
-        "correct": 0,
-        "explanation": "American Indian tribes include Cherokee, Navajo, Sioux, Chippewa, Choctaw, Pueblo, Apache, Iroquois, and many others."
+        "answers": ["Cherokee", "Navajo", "Sioux", "Chippewa", "Choctaw", "Pueblo", "Apache", "Iroquois", "Creek", "Blackfeet", "Seminole", "Cheyenne", "Arawak", "Shawnee", "Mohegan", "Huron", "Oneida", "Lakota", "Crow", "Teton", "Hopi", "Inuit"],
+        "correct": "Cherokee"
     },
-    {
+    88: {
         "question": "Name one of the two longest rivers in the United States.",
-        "options": ["Missouri (River)", "Colorado River", "Hudson River", "Rio Grande"],
-        "correct": 0,
-        "explanation": "The Missouri River and Mississippi River are the two longest rivers in the United States."
+        "answers": ["Missouri (River)", "Mississippi (River)"],
+        "correct": "Mississippi River"
     },
-    {
+    89: {
         "question": "What ocean is on the West Coast of the United States?",
-        "options": ["Pacific (Ocean)", "Atlantic Ocean", "Indian Ocean", "Arctic Ocean"],
-        "correct": 0,
-        "explanation": "The Pacific Ocean borders the West Coast of the United States."
+        "answers": ["Pacific (Ocean)"],
+        "correct": "Pacific Ocean"
     },
-    {
+    90: {
         "question": "What ocean is on the East Coast of the United States?",
-        "options": ["Atlantic (Ocean)", "Pacific Ocean", "Indian Ocean", "Arctic Ocean"],
-        "correct": 0,
-        "explanation": "The Atlantic Ocean borders the East Coast of the United States."
+        "answers": ["Atlantic (Ocean)"],
+        "correct": "Atlantic Ocean"
     },
-    {
+    91: {
         "question": "Name one U.S. territory.",
-        "options": ["Puerto Rico", "Hawaii", "Alaska", "Washington D.C."],
-        "correct": 0,
-        "explanation": "U.S. territories include Puerto Rico, U.S. Virgin Islands, American Samoa, Northern Mariana Islands, and Guam."
+        "answers": ["Puerto Rico", "U.S. Virgin Islands", "American Samoa", "Northern Mariana Islands", "Guam"],
+        "correct": "Puerto Rico"
     },
-    {
+    92: {
         "question": "Name one state that borders Canada.",
-        "options": ["Maine", "California", "Texas", "Florida"],
-        "correct": 0,
-        "explanation": "States bordering Canada include Maine, New Hampshire, Vermont, New York, Pennsylvania, Ohio, Michigan, Minnesota, North Dakota, Montana, Idaho, Washington, and Alaska."
+        "answers": ["Maine", "New Hampshire", "Vermont", "New York", "Pennsylvania", "Ohio", "Michigan", "Minnesota", "North Dakota", "Montana", "Idaho", "Washington", "Alaska"],
+        "correct": "New York"
     },
-    {
+    93: {
         "question": "Name one state that borders Mexico.",
-        "options": ["California", "Nevada", "Colorado", "Oklahoma"],
-        "correct": 0,
-        "explanation": "States bordering Mexico are California, Arizona, New Mexico, and Texas."
+        "answers": ["California", "Arizona", "New Mexico", "Texas"],
+        "correct": "California"
     },
-    {
+    94: {
         "question": "What is the capital of the United States?",
-        "options": ["Washington, D.C.", "New York City", "Philadelphia", "Boston"],
-        "correct": 0,
-        "explanation": "Washington, D.C. is the capital of the United States."
+        "answers": ["Washington, D.C."],
+        "correct": "Washington, D.C."
     },
-    {
+    95: {
         "question": "Where is the Statue of Liberty?",
-        "options": ["New York (Harbor)", "Boston Harbor", "San Francisco Bay", "Chesapeake Bay"],
-        "correct": 0,
-        "explanation": "The Statue of Liberty is located in New York Harbor on Liberty Island."
+        "answers": ["New York (Harbor)", "Liberty Island"],
+        "correct": "New York Harbor"
     },
-    {
+    96: {
         "question": "Why does the flag have 13 stripes?",
-        "options": ["because there were 13 original colonies", "for the 13 founding fathers", "for 13 years of war", "for 13 amendments"],
-        "correct": 0,
-        "explanation": "The 13 stripes represent the 13 original colonies that declared independence from Britain."
+        "answers": ["because there were 13 original colonies", "because the stripes represent the original colonies"],
+        "correct": "because there were 13 original colonies"
     },
-    {
+    97: {
         "question": "Why does the flag have 50 stars?",
-        "options": ["because there is one star for each state", "for 50 years of independence", "for 50 founding fathers", "for 50 amendments"],
-        "correct": 0,
-        "explanation": "The 50 stars represent the 50 states of the United States."
+        "answers": ["because there is one star for each state", "because each star represents a state", "because there are 50 states"],
+        "correct": "because there are 50 states"
     },
-    {
+    98: {
         "question": "What is the name of the national anthem?",
-        "options": ["The Star-Spangled Banner", "America the Beautiful", "God Bless America", "My Country 'Tis of Thee"],
-        "correct": 0,
-        "explanation": "The Star-Spangled Banner is the national anthem of the United States."
+        "answers": ["The Star-Spangled Banner"],
+        "correct": "The Star-Spangled Banner"
     },
-    {
+    99: {
         "question": "When do we celebrate Independence Day?",
-        "options": ["July 4", "July 14", "May 4", "September 4"],
-        "correct": 0,
-        "explanation": "Independence Day is celebrated on July 4th, commemorating the adoption of the Declaration of Independence."
+        "answers": ["July 4"],
+        "correct": "July 4"
     },
-    {
+    100: {
         "question": "Name two national U.S. holidays.",
-        "options": ["New Year's Day, Christmas", "Valentine's Day, Halloween", "Earth Day, Arbor Day", "Easter, Passover"],
-        "correct": 0,
-        "explanation": "National holidays include New Year's Day, Martin Luther King Jr. Day, Presidents' Day, Memorial Day, Independence Day, Labor Day, Columbus Day, Veterans Day, Thanksgiving, and Christmas."
+        "answers": ["New Year's Day", "Martin Luther King, Jr. Day", "Presidents' Day", "Memorial Day", "Independence Day", "Labor Day", "Columbus Day", "Veterans Day", "Thanksgiving", "Christmas"],
+        "correct": "Independence Day and Thanksgiving"
     }
-]
+}
 
-# ENGLISH READING VOCABULARY
-READING_VOCABULARY = [
-    # PEOPLE
-    "Abraham Lincoln", "George Washington",
-    # CIVICS
-    "American flag", "Bill of Rights", "capital", "citizen", "city", "Congress", "country", 
-    "Father of Our Country", "government", "President", "right", "Senators", "state", "states", "White House",
-    # PLACES
-    "America", "United States", "U.S.",
-    # HOLIDAYS
-    "Presidents' Day", "Memorial Day", "Flag Day", "Independence Day", "Labor Day", "Columbus Day", "Thanksgiving",
-    # QUESTION WORDS
-    "How", "What", "When", "Where", "Who", "Why",
-    # VERBS
-    "can", "come", "do", "does", "elects", "have", "has", "is", "are", "was", "be", "lives", "lived", "meet", "name", "pay", "vote", "want",
-    # OTHER FUNCTION
-    "a", "for", "here", "in", "of", "on", "the", "to", "we",
-    # OTHER CONTENT
-    "colors", "dollar bill", "first", "largest", "many", "most", "north", "one", "people", "second", "south"
-]
-
-# ENGLISH WRITING VOCABULARY  
-WRITING_VOCABULARY = [
-    # PEOPLE
-    "Adams", "Lincoln", "Washington",
-    # CIVICS
-    "American Indians", "capital", "citizens", "Civil War", "Congress", "Father of Our Country", "flag", "free", 
-    "freedom of speech", "President", "right", "Senators", "state", "states", "White House",
-    # PLACES
-    "Alaska", "California", "Canada", "Delaware", "Mexico", "New York City", "United States", "Washington", "Washington, D.C.",
-    # MONTHS
-    "February", "May", "June", "July", "September", "October", "November",
-    # HOLIDAYS
-    "Presidents' Day", "Memorial Day", "Flag Day", "Independence Day", "Labor Day", "Columbus Day", "Thanksgiving",
-    # VERBS
-    "can", "come", "elect", "have", "has", "is", "was", "be", "lives", "lived", "meets", "pay", "vote", "want",
-    # OTHER FUNCTION
-    "and", "during", "for", "here", "in", "of", "on", "the", "to", "we",
-    # OTHER CONTENT
-    "blue", "dollar bill", "fifty", "50", "first", "largest", "most", "north", "one", "one hundred", "100", 
-    "people", "red", "second", "south", "taxes", "white"
-]
-
-# ENGLISH READING TEST SENTENCES
+# Reading vocabulary sentences
 READING_SENTENCES = [
     "America is the land of freedom.",
-    "All people want to be free.",
-    "America is the home of the brave.",
-    "America is the land of the free.",
-    "Citizens have the right to freedom of speech.",
-    "All citizens have the right to vote.",
-    "George Washington was the first President.",
-    "Abraham Lincoln was President during the Civil War.",
-    "The President lives in the White House.",
-    "The President is the Commander in Chief.",
-    "Congress meets in the capital.",
-    "Congress makes the laws.",
-    "The capital of the United States is Washington, D.C.",
-    "Washington, D.C. is the capital of the United States.",
-    "Citizens have many rights.",
     "Citizens have the right to vote.",
-    "George Washington is the Father of Our Country.",
-    "Martha Washington was the first First Lady.",
+    "George Washington was the first President.",
     "The American flag has stars and stripes.",
-    "The flag has thirteen stripes.",
-    "The Statue of Liberty was a gift from France.",
-    "France gave the Statue of Liberty to America.",
-    "Independence Day is in July.",
-    "The Fourth of July is a holiday.",
-    "Labor Day is in September.",
-    "Memorial Day is in May.",
-    "Presidents' Day is in February.",
-    "Thanksgiving is in November.",
-    "Columbus Day is in October.",
-    "Flag Day is in June."
+    "Congress makes the laws.",
+    "We celebrate Independence Day on July 4.",
+    "The President lives in the White House.",
+    "Abraham Lincoln was a great President.",
+    "The Bill of Rights protects our freedoms.",
+    "The United States has fifty states."
 ]
 
-# ENGLISH WRITING TEST SENTENCES
+# Writing vocabulary sentences
 WRITING_SENTENCES = [
-    "Washington was the first President.",
-    "Adams was the second President.",
-    "Lincoln was President during the Civil War.",
-    "George Washington is the Father of Our Country.",
-    "The President lives in the White House.",
-    "The White House is in Washington, D.C.",
-    "Washington, D.C., is the capital of the United States.",
-    "The capital of the United States is Washington, D.C.",
-    "New York City has the most people.",
-    "Alaska is the largest state.",
-    "California is south of Canada.",
-    "Delaware is north of Mexico.",
-    "Canada is north of the United States.",
-    "Mexico is south of the United States.",
-    "Citizens can vote.",
-    "Citizens have the right to vote.",
-    "All citizens can vote.",
-    "Only citizens can vote.",
-    "Citizens vote for the President in November.",
-    "We vote for President in November.",
-    "We vote for Congress in November.",
-    "Congress meets for the country.",
-    "Congress makes laws for the country.",
-    "All people want to be free.",
-    "All people want freedom.",
-    "America is the land of the free.",
-    "America is free.",
-    "America has freedom of speech.",
-    "Everyone in America has freedom of speech.",
-    "American Indians lived here first.",
-    "American Indians came to America first.",
-    "The American flag has red, white, and blue.",
+    "America is a free country.",
+    "Citizens can vote for President.",
+    "George Washington was the Father of Our Country.",
     "The flag is red, white, and blue.",
-    "The American flag has fifty stars.",
-    "The flag has fifty stars.",
-    "There are fifty states in America.",
-    "America has fifty states.",
-    "Independence Day is July 4.",
-    "The Fourth of July is Independence Day.",
-    "We celebrate Independence Day in July.",
-    "Memorial Day is in May.",
-    "Presidents' Day is in February.",
-    "Labor Day is in September.",
-    "Columbus Day is in October.",
-    "Flag Day is in June.",
-    "Thanksgiving is in November.",
-    "Citizens pay taxes.",
-    "People in America pay taxes.",
-    "All people pay taxes.",
-    "Lincoln lived in the White House.",
-    "Washington lived in the White House.",
-    "Adams lived in the White House.",
-    "The President has lived in the White House for one hundred years.",
-    "People come to America for freedom.",
-    "People come to America to be free.",
-    "People come to America for a better life."
+    "Congress meets in Washington, D.C.",
+    "We celebrate freedom on Independence Day.",
+    "Lincoln freed the slaves.",
+    "The President lives in the White House.",
+    "Citizens have rights and freedoms.",
+    "The United States has fifty states and Washington, D.C."
 ]
 
 HTML_TEMPLATE = '''
@@ -752,7 +542,7 @@ HTML_TEMPLATE = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Complete U.S. Naturalization Test Practice</title>
+    <title>U.S. Naturalization Test Practice</title>
     <style>
         * {
             margin: 0;
@@ -761,757 +551,475 @@ HTML_TEMPLATE = '''
         }
         
         body {
-            font-family: 'Georgia', serif;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
             min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #333;
+            padding: 20px;
         }
         
         .container {
+            max-width: 900px;
+            margin: 0 auto;
             background: white;
             border-radius: 15px;
-            padding: 2rem;
-            max-width: 900px;
-            width: 90%;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-            position: relative;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
             overflow: hidden;
-        }
-        
-        .container::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 5px;
-            background: linear-gradient(90deg, #ff6b35, #f7931e, #ffd23f);
         }
         
         .header {
+            background: linear-gradient(45deg, #c41e3a, #003366);
+            color: white;
+            padding: 30px;
             text-align: center;
-            margin-bottom: 2rem;
         }
         
         .header h1 {
-            color: #1e3c72;
-            font-size: 2.2rem;
-            margin-bottom: 0.5rem;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
         }
         
         .header p {
-            color: #666;
-            font-size: 1.1rem;
+            font-size: 1.2em;
+            opacity: 0.9;
         }
         
-        .test-selection {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 1.5rem;
-            margin: 2rem 0;
+        .content {
+            padding: 40px;
         }
         
-        .test-card {
-            background: #f8f9fa;
+        .test-section {
+            margin-bottom: 40px;
+            padding: 30px;
             border: 2px solid #e0e0e0;
             border-radius: 10px;
-            padding: 1.5rem;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.3s ease;
+            background: #f9f9f9;
         }
         
-        .test-card:hover {
-            border-color: #2196f3;
-            transform: translateY(-3px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        .test-section h2 {
+            color: #003366;
+            margin-bottom: 20px;
+            font-size: 1.8em;
+            border-bottom: 3px solid #c41e3a;
+            padding-bottom: 10px;
         }
         
-        .test-card h3 {
-            color: #1e3c72;
-            margin-bottom: 1rem;
-        }
-        
-        .test-card p {
-            color: #666;
-            margin-bottom: 1rem;
-        }
-        
-        .progress-bar {
-            background: #e0e0e0;
-            height: 8px;
-            border-radius: 4px;
-            margin: 1rem 0 2rem 0;
-            overflow: hidden;
-        }
-        
-        .progress {
-            background: linear-gradient(90deg, #4CAF50, #45a049);
-            height: 100%;
-            transition: width 0.3s ease;
-        }
-        
-        .score-board {
-            display: flex;
-            justify-content: space-between;
-            background: #f8f9fa;
-            padding: 1rem;
+        .question {
+            background: white;
+            padding: 25px;
+            margin: 20px 0;
             border-radius: 8px;
-            margin-bottom: 2rem;
+            border-left: 5px solid #c41e3a;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
         }
         
-        .score-item {
-            text-align: center;
-        }
-        
-        .score-number {
-            font-size: 1.5rem;
-            font-weight: bold;
-            color: #1e3c72;
-        }
-        
-        .score-label {
-            font-size: 0.9rem;
-            color: #666;
-        }
-        
-        .question-card {
-            background: #fff;
-            border: 2px solid #e0e0e0;
-            border-radius: 10px;
-            padding: 1.5rem;
-            margin-bottom: 2rem;
-        }
-        
-        .question-number {
-            color: #1e3c72;
-            font-weight: bold;
-            margin-bottom: 1rem;
-        }
-        
-        .question-text {
-            font-size: 1.3rem;
-            line-height: 1.5;
-            margin-bottom: 1.5rem;
-            color: #333;
+        .question h3 {
+            color: #003366;
+            margin-bottom: 15px;
+            font-size: 1.3em;
         }
         
         .options {
             display: grid;
-            gap: 1rem;
+            gap: 10px;
+            margin-top: 15px;
         }
         
         .option {
-            background: #f8f9fa;
-            border: 2px solid #e0e0e0;
-            padding: 1rem;
+            padding: 12px 20px;
+            background: #f0f8ff;
+            border: 2px solid #ddd;
             border-radius: 8px;
             cursor: pointer;
             transition: all 0.3s ease;
-            font-size: 1.1rem;
         }
         
         .option:hover {
-            background: #e3f2fd;
-            border-color: #2196f3;
+            background: #e6f3ff;
+            border-color: #4a90e2;
             transform: translateY(-2px);
         }
         
-        .option.correct {
-            background: #e8f5e8;
-            border-color: #4caf50;
-            color: #2e7d32;
+        .option input[type="radio"] {
+            margin-right: 10px;
         }
         
-        .option.incorrect {
-            background: #ffebee;
-            border-color: #f44336;
-            color: #c62828;
-        }
-        
-        .explanation {
-            background: #e3f2fd;
-            border-left: 4px solid #2196f3;
-            padding: 1rem;
-            margin-top: 1rem;
-            border-radius: 0 8px 8px 0;
-        }
-        
-        .explanation h4 {
-            color: #1565c0;
-            margin-bottom: 0.5rem;
-        }
-        
-        .reading-test, .writing-test {
-            text-align: center;
-        }
-        
-        .sentence-display {
-            background: #f8f9fa;
-            border: 2px solid #e0e0e0;
-            border-radius: 10px;
-            padding: 2rem;
-            margin: 2rem 0;
-            font-size: 1.4rem;
-            line-height: 1.6;
-            color: #333;
-        }
-        
-        .writing-input {
-            width: 100%;
-            padding: 1rem;
-            font-size: 1.2rem;
-            border: 2px solid #e0e0e0;
+        .english-test {
+            background: #f0f8ff;
+            padding: 25px;
+            margin: 20px 0;
             border-radius: 8px;
-            margin: 1rem 0;
-            font-family: 'Georgia', serif;
+            border: 2px solid #4a90e2;
         }
         
-        .writing-input:focus {
-            outline: none;
-            border-color: #2196f3;
-        }
-        
-        .buttons {
-            display: flex;
-            gap: 1rem;
-            justify-content: center;
-            margin-top: 2rem;
-            flex-wrap: wrap;
-        }
-        
-        .btn {
-            background: #1e3c72;
-            color: white;
-            border: none;
-            padding: 1rem 2rem;
-            border-radius: 8px;
+        .sentence-option {
+            background: white;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            border: 1px solid #ddd;
             cursor: pointer;
-            font-size: 1.1rem;
             transition: all 0.3s ease;
         }
         
+        .sentence-option:hover {
+            background: #f0f8ff;
+            border-color: #4a90e2;
+        }
+        
+        .writing-area {
+            width: 100%;
+            height: 120px;
+            padding: 15px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            font-family: 'Courier New', monospace;
+            resize: vertical;
+        }
+        
+        .btn {
+            background: linear-gradient(45deg, #c41e3a, #e74c3c);
+            color: white;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 10px 5px;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
         .btn:hover {
-            background: #2a5298;
+            background: linear-gradient(45deg, #a91729, #c0392b);
             transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
         }
         
-        .btn:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-            transform: none;
+        .btn-secondary {
+            background: linear-gradient(45deg, #003366, #2a5298);
         }
         
-        .btn.secondary {
-            background: #6c757d;
+        .btn-secondary:hover {
+            background: linear-gradient(45deg, #002244, #1e3c72);
         }
         
-        .btn.secondary:hover {
-            background: #5a6268;
-        }
-        
-        .final-score {
+        .result {
+            padding: 30px;
+            margin: 20px 0;
+            border-radius: 10px;
             text-align: center;
-            padding: 2rem;
+            font-size: 1.2em;
         }
         
-        .final-score h2 {
-            color: #1e3c72;
-            font-size: 2rem;
-            margin-bottom: 1rem;
+        .result.pass {
+            background: #d4edda;
+            border: 2px solid #28a745;
+            color: #155724;
         }
         
-        .final-score .score {
-            font-size: 3rem;
+        .result.fail {
+            background: #f8d7da;
+            border: 2px solid #dc3545;
+            color: #721c24;
+        }
+        
+        .score {
+            font-size: 2em;
             font-weight: bold;
-            color: #4caf50;
-            margin: 1rem 0;
+            margin: 15px 0;
         }
         
-        .final-score .message {
-            font-size: 1.2rem;
-            color: #666;
-            margin-bottom: 2rem;
-        }
-        
-        .citizenship-info {
-            background: #f8f9fa;
+        .instructions {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            color: #856404;
+            padding: 20px;
             border-radius: 8px;
-            padding: 1.5rem;
-            margin-top: 1rem;
-            border-left: 4px solid #ff6b35;
+            margin-bottom: 25px;
         }
         
-        .citizenship-info h3 {
-            color: #1e3c72;
-            margin-bottom: 1rem;
+        .instructions h3 {
+            margin-bottom: 10px;
+            color: #b8860b;
         }
         
-        .citizenship-info ul {
-            text-align: left;
-            margin: 1rem 0;
+        .flag-decoration {
+            text-align: center;
+            margin: 20px 0;
+            font-size: 2em;
         }
         
-        .english-result {
-            background: #f8f9fa;
-            border-radius: 8px;
-            padding: 1rem;
-            margin: 1rem 0;
-            border-left: 4px solid #4caf50;
+        .progress {
+            background: #e0e0e0;
+            border-radius: 20px;
+            height: 10px;
+            margin: 20px 0;
+            overflow: hidden;
         }
         
-        .english-result.incorrect {
-            border-left-color: #f44336;
-        }
-        
-        @media (max-width: 600px) {
-            .container {
-                padding: 1.5rem;
-                margin: 1rem;
-            }
-            
-            .header h1 {
-                font-size: 1.8rem;
-            }
-            
-            .question-text {
-                font-size: 1.1rem;
-            }
-            
-            .buttons {
-                flex-direction: column;
-            }
-            
-            .score-board {
-                flex-direction: column;
-                gap: 1rem;
-            }
-            
-            .test-selection {
-                grid-template-columns: 1fr;
-            }
+        .progress-bar {
+            background: linear-gradient(45deg, #c41e3a, #e74c3c);
+            height: 100%;
+            transition: width 0.3s ease;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        {% if not session.get('test_started') %}
         <div class="header">
-            <h1>🇺🇸 Complete U.S. Naturalization Test Practice</h1>
-            <p>Master ALL components of the naturalization test</p>
+            <h1>🇺🇸 U.S. Naturalization Test</h1>
+            <p>Official Practice Test - USCIS Civics & English</p>
         </div>
         
-        <div class="citizenship-info">
-            <h3>About the Naturalization Test</h3>
-            <p>The naturalization test has TWO main components:</p>
-            <ul>
-                <li><strong>English Test:</strong> Reading, Writing, and Speaking</li>
-                <li><strong>Civics Test:</strong> U.S. History and Government (6 out of 10 questions correct)</li>
-            </ul>
-            <p>This practice includes ALL 100 official civics questions and complete English vocabulary!</p>
-        </div>
-        
-        <div class="test-selection">
-            <div class="test-card" onclick="startTest('civics')">
-                <h3>📚 Civics Test</h3>
-                <p>Practice all 100 official civics questions about U.S. government and history</p>
-                <strong>10 random questions • Need 6 correct to pass</strong>
-            </div>
-            
-            <div class="test-card" onclick="startTest('reading')">
-                <h3>📖 English Reading Test</h3>
-                <p>Practice reading sentences with official vocabulary words</p>
-                <strong>Read 1 out of 3 sentences correctly</strong>
-            </div>
-            
-            <div class="test-card" onclick="startTest('writing')">
-                <h3>✍️ English Writing Test</h3>
-                <p>Practice writing sentences with official vocabulary words</p>
-                <strong>Write 1 out of 3 sentences correctly</strong>
-            </div>
-        </div>
-        
-        {% elif session.get('test_completed') %}
-        <div class="final-score">
-            <h2>🎉 Test Complete!</h2>
-            {% if session.get('test_type') == 'civics' %}
-                <div class="score">{{ session.get('correct_answers', 0) }}/{{ session.get('total_questions', 10) }}</div>
-                <div class="message">
-                    {% if session.get('correct_answers', 0) >= 6 %}
-                        Excellent! You passed the civics test! 🎊<br>
-                        You're well-prepared for the actual naturalization interview.
-                    {% else %}
-                        Keep studying! You need at least 6 correct answers to pass.<br>
-                        Review the questions you missed and try again.
-                    {% endif %}
+        <div class="content">
+            {% if page == 'home' %}
+            <div class="test-section">
+                <h2>🏛️ Welcome to the Naturalization Test Practice</h2>
+                <div class="instructions">
+                    <h3>Test Requirements:</h3>
+                    <ul style="margin-left: 20px; margin-top: 10px;">
+                        <li><strong>Civics Test:</strong> Answer 6 out of 10 questions correctly</li>
+                        <li><strong>English Reading:</strong> Read 1 out of 3 sentences correctly</li>
+                        <li><strong>English Writing:</strong> Write 1 out of 3 sentences correctly</li>
+                    </ul>
                 </div>
-            {% elif session.get('test_type') == 'reading' %}
-                <div class="message">
-                    {% if session.get('reading_passed') %}
-                        Perfect! You passed the reading test! 📖<br>
-                        You successfully read the required sentence.
-                    {% else %}
-                        Keep practicing! You need to read at least one sentence correctly.<br>
-                        Study the vocabulary words and try again.
-                    {% endif %}
+                <div class="flag-decoration">🗽⭐🦅⭐🗽</div>
+                <div style="text-align: center;">
+                    <a href="/civics" class="btn">Start Civics Test</a>
+                    <a href="/english" class="btn btn-secondary">Start English Test</a>
                 </div>
-            {% elif session.get('test_type') == 'writing' %}
-                <div class="message">
-                    {% if session.get('writing_passed') %}
-                        Excellent! You passed the writing test! ✍️<br>
-                        You successfully wrote the required sentence.
-                    {% else %}
-                        Keep practicing! You need to write at least one sentence correctly.<br>
-                        Study the vocabulary words and try again.
-                    {% endif %}
-                </div>
+            </div>
             {% endif %}
             
-            <div class="citizenship-info">
-                <h3>Next Steps Toward U.S. Citizenship</h3>
-                <p>Ready to apply for naturalization? Visit <strong>uscis.gov</strong> to:</p>
-                <ul>
-                    <li>Check your eligibility requirements</li>
-                    <li>Download Form N-400 (Application for Naturalization)</li>
-                    <li>Find additional study materials and resources</li>
-                    <li>Schedule your naturalization interview</li>
-                    <li>Learn about the Oath of Allegiance ceremony</li>
-                </ul>
-            </div>
-            
-            <div class="buttons">
-                <button class="btn" onclick="goHome()">Take Another Test</button>
-                <button class="btn secondary" onclick="startTest('civics')" {% if session.get('test_type') == 'civics' %}style="display:none"{% endif %}>Try Civics Test</button>
-                <button class="btn secondary" onclick="startTest('reading')" {% if session.get('test_type') == 'reading' %}style="display:none"{% endif %}>Try Reading Test</button>
-                <button class="btn secondary" onclick="startTest('writing')" {% if session.get('test_type') == 'writing' %}style="display:none"{% endif %}>Try Writing Test</button>
-            </div>
-        </div>
-        
-        {% elif session.get('test_type') == 'civics' %}
-        <div class="header">
-            <h1>📚 Civics Test Practice</h1>
-            <p>U.S. History and Government</p>
-        </div>
-        
-        <div class="progress-bar">
-            <div class="progress" style="width: {{ (session.get('current_question', 0) / session.get('total_questions', 10)) * 100 }}%"></div>
-        </div>
-        
-        <div class="score-board">
-            <div class="score-item">
-                <div class="score-number">{{ session.get('current_question', 0) }}</div>
-                <div class="score-label">Question</div>
-            </div>
-            <div class="score-item">
-                <div class="score-number">{{ session.get('correct_answers', 0) }}</div>
-                <div class="score-label">Correct</div>
-            </div>
-            <div class="score-item">
-                <div class="score-number">{{ session.get('total_questions', 10) - session.get('current_question', 0) }}</div>
-                <div class="score-label">Remaining</div>
-            </div>
-        </div>
-        
-        {% if current_question %}
-        <div class="question-card">
-            <div class="question-number">Question {{ session.get('current_question', 0) }} of {{ session.get('total_questions', 10) }}</div>
-            <div class="question-text">{{ current_question.question }}</div>
-            
-            <div class="options" id="options">
-                {% for i, option in enumerate(current_question.options) %}
-                <div class="option" onclick="selectAnswer({{ i }})" id="option-{{ i }}">
-                    {{ option }}
+            {% if page == 'civics' %}
+            <form method="POST">
+                <div class="test-section">
+                    <h2>📚 Civics Test (History and Government)</h2>
+                    <div class="instructions">
+                        <p><strong>Instructions:</strong> Answer all 10 questions. You need 6 correct answers to pass.</p>
+                    </div>
+                    
+                    {% for i in range(questions|length) %}
+                    <div class="question">
+                        <h3>Question {{ i + 1 }}:</h3>
+                        <p style="font-size: 1.1em; margin-bottom: 15px;">{{ questions[i].question }}</p>
+                        <div class="options">
+                            {% for answer in questions[i].answers %}
+                            <label class="option">
+                                <input type="radio" name="q{{ i }}" value="{{ answer }}" required>
+                                {{ answer }}
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                    
+                    <div style="text-align: center; margin-top: 30px;">
+                        <button type="submit" class="btn">Submit Civics Test</button>
+                        <a href="/" class="btn btn-secondary">Back to Home</a>
+                    </div>
                 </div>
-                {% endfor %}
-            </div>
-            
-            <div id="explanation" style="display: none;">
-                <div class="explanation">
-                    <h4>Explanation:</h4>
-                    <p>{{ current_question.explanation }}</p>
-                </div>
-            </div>
-        </div>
-        
-        <div class="buttons">
-            <button class="btn" id="nextBtn" onclick="nextQuestion()" style="display: none;">Next Question</button>
-        </div>
-        {% endif %}
-        
-        {% elif session.get('test_type') == 'reading' %}
-        <div class="header">
-            <h1>📖 English Reading Test</h1>
-            <p>Read the sentence aloud clearly</p>
-        </div>
-        
-        <div class="reading-test">
-            {% if session.get('reading_sentences') %}
-                <div class="question-number">Sentence {{ session.get('reading_attempt', 0) + 1 }} of 3</div>
-                <div class="sentence-display">
-                    {{ session.get('reading_sentences')[session.get('reading_attempt', 0)] }}
-                </div>
-                <p style="margin: 1rem 0;">Read this sentence aloud. In the actual test, the USCIS officer will listen to you read.</p>
-                
-                <div class="buttons">
-                    <button class="btn" onclick="readingSuccess()">I Read It Correctly</button>
-                    <button class="btn secondary" onclick="readingFailed()">I Need to Try Another Sentence</button>
-                </div>
+            </form>
             {% endif %}
-        </div>
-        
-        {% elif session.get('test_type') == 'writing' %}
-        <div class="header">
-            <h1>✍️ English Writing Test</h1>
-            <p>Write the sentence exactly as shown</p>
-        </div>
-        
-        <div class="writing-test">
-            {% if session.get('writing_sentences') %}
-                <div class="question-number">Sentence {{ session.get('writing_attempt', 0) + 1 }} of 3</div>
-                <div class="sentence-display">
-                    {{ session.get('writing_sentences')[session.get('writing_attempt', 0)] }}
+            
+            {% if page == 'english' %}
+            <form method="POST">
+                <div class="test-section">
+                    <h2>📖 English Test</h2>
+                    
+                    <div class="english-test">
+                        <h3>Reading Test</h3>
+                        <div class="instructions">
+                            <p><strong>Instructions:</strong> Choose one sentence and read it aloud correctly. Select the sentence you can read best.</p>
+                        </div>
+                        {% for sentence in reading_sentences %}
+                        <label class="sentence-option">
+                            <input type="radio" name="reading" value="{{ sentence }}" required>
+                            {{ sentence }}
+                        </label>
+                        {% endfor %}
+                    </div>
+                    
+                    <div class="english-test">
+                        <h3>Writing Test</h3>
+                        <div class="instructions">
+                            <p><strong>Instructions:</strong> Choose one sentence and write it exactly in the text area below.</p>
+                        </div>
+                        {% for sentence in writing_sentences %}
+                        <label class="sentence-option">
+                            <input type="radio" name="writing_choice" value="{{ sentence }}" required onclick="document.getElementById('writing_text').placeholder='Write: ' + this.value">
+                            {{ sentence }}
+                        </label>
+                        {% endfor %}
+                        <textarea id="writing_text" name="writing_text" class="writing-area" placeholder="Select a sentence above, then write it here exactly as shown..." required></textarea>
+                    </div>
+                    
+                    <div style="text-align: center; margin-top: 30px;">
+                        <button type="submit" class="btn">Submit English Test</button>
+                        <a href="/" class="btn btn-secondary">Back to Home</a>
+                    </div>
                 </div>
-                <p style="margin: 1rem 0;">Write this sentence in the box below:</p>
-                <input type="text" class="writing-input" id="writingInput" placeholder="Type the sentence here...">
-                
-                <div class="buttons">
-                    <button class="btn" onclick="checkWriting()">Check My Writing</button>
-                </div>
-                
-                <div id="writingResult" style="display: none;"></div>
+            </form>
             {% endif %}
-        </div>
-        {% endif %}
-        
-        <div class="buttons" style="margin-top: 1rem;">
-            <button class="btn secondary" onclick="goHome()">← Back to Test Selection</button>
+            
+            {% if page == 'civics_result' %}
+            <div class="test-section">
+                <h2>📊 Civics Test Results</h2>
+                <div class="result {{ 'pass' if passed else 'fail' }}">
+                    <div class="score">{{ score }}/10</div>
+                    <h3>{{ 'PASSED! 🎉' if passed else 'FAILED 😔' }}</h3>
+                    <p>{{ 'Congratulations! You answered enough questions correctly.' if passed else 'You need to answer at least 6 questions correctly to pass.' }}</p>
+                </div>
+                
+                <div style="background: white; padding: 25px; border-radius: 8px; margin: 20px 0;">
+                    <h3 style="color: #003366; margin-bottom: 15px;">Review Your Answers:</h3>
+                    {% for i in range(results|length) %}
+                    <div style="margin: 15px 0; padding: 15px; border-left: 4px solid {{ '#28a745' if results[i].correct else '#dc3545' }}; background: {{ '#f8f9fa' if results[i].correct else '#fff5f5' }};">
+                        <p><strong>Q{{ i + 1 }}:</strong> {{ results[i].question }}</p>
+                        <p><strong>Your Answer:</strong> {{ results[i].user_answer }}</p>
+                        <p><strong>Correct Answer:</strong> {{ results[i].correct_answer }}</p>
+                        <p style="color: {{ '#28a745' if results[i].correct else '#dc3545' }}; font-weight: bold;">
+                            {{ '✓ Correct' if results[i].correct else '✗ Incorrect' }}
+                        </p>
+                    </div>
+                    {% endfor %}
+                </div>
+                
+                <div style="text-align: center;">
+                    <a href="/civics" class="btn">Take Test Again</a>
+                    <a href="/" class="btn btn-secondary">Back to Home</a>
+                </div>
+            </div>
+            {% endif %}
+            
+            {% if page == 'english_result' %}
+            <div class="test-section">
+                <h2>📝 English Test Results</h2>
+                
+                <div class="result {{ 'pass' if reading_passed else 'fail' }}">
+                    <h3>Reading Test: {{ 'PASSED! ✓' if reading_passed else 'FAILED ✗' }}</h3>
+                    <p><strong>Selected Sentence:</strong> {{ reading_sentence }}</p>
+                    <p>{{ 'You successfully selected a sentence to read!' if reading_passed else 'Please practice reading the vocabulary.' }}</p>
+                </div>
+                
+                <div class="result {{ 'pass' if writing_passed else 'fail' }}">
+                    <h3>Writing Test: {{ 'PASSED! ✓' if writing_passed else 'FAILED ✗' }}</h3>
+                    <p><strong>Target Sentence:</strong> {{ writing_target }}</p>
+                    <p><strong>Your Writing:</strong> {{ writing_response }}</p>
+                    <p>{{ 'Perfect! You wrote the sentence correctly.' if writing_passed else 'The sentence does not match exactly. Please try again.' }}</p>
+                </div>
+                
+                <div class="result {{ 'pass' if overall_passed else 'fail' }}">
+                    <div class="score">Overall: {{ 'PASSED' if overall_passed else 'FAILED' }}</div>
+                    <p>{{ 'Congratulations! You passed both English components.' if overall_passed else 'You must pass both reading and writing to complete the English test.' }}</p>
+                </div>
+                
+                <div style="text-align: center;">
+                    <a href="/english" class="btn">Take Test Again</a>
+                    <a href="/" class="btn btn-secondary">Back to Home</a>
+                </div>
+            </div>
+            {% endif %}
         </div>
     </div>
-
-    <script>
-        function startTest(testType) {
-            fetch('/start', { 
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ test_type: testType })
-            }).then(() => location.reload());
-        }
-        
-        function selectAnswer(selectedIndex) {
-            const options = document.querySelectorAll('.option');
-            const explanation = document.getElementById('explanation');
-            const nextBtn = document.getElementById('nextBtn');
-            
-            options.forEach(option => {
-                option.style.pointerEvents = 'none';
-            });
-            
-            fetch('/answer', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ answer: selectedIndex })
-            })
-            .then(response => response.json())
-            .then(data => {
-                options[data.correct_answer].classList.add('correct');
-                
-                if (selectedIndex !== data.correct_answer) {
-                    options[selectedIndex].classList.add('incorrect');
-                }
-                
-                explanation.style.display = 'block';
-                nextBtn.style.display = 'inline-block';
-            });
-        }
-        
-        function nextQuestion() {
-            fetch('/next', { method: 'POST' })
-                .then(() => location.reload());
-        }
-        
-        function readingSuccess() {
-            fetch('/reading_result', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ success: true })
-            }).then(() => location.reload());
-        }
-        
-        function readingFailed() {
-            fetch('/reading_result', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ success: false })
-            }).then(() => location.reload());
-        }
-        
-        function checkWriting() {
-            const input = document.getElementById('writingInput').value;
-            const result = document.getElementById('writingResult');
-            
-            fetch('/check_writing', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ written_text: input })
-            })
-            .then(response => response.json())
-            .then(data => {
-                result.style.display = 'block';
-                if (data.correct) {
-                    result.innerHTML = '<div class="english-result"><h4>✅ Correct!</h4><p>Perfect! You wrote the sentence correctly.</p><button class="btn" onclick="location.reload()">Complete Test</button></div>';
-                } else {
-                    result.innerHTML = '<div class="english-result incorrect"><h4>❌ Try Again</h4><p>Not quite right. Check your spelling, capitalization, and punctuation.</p><p><strong>Expected:</strong> ' + data.expected + '</p><p><strong>You wrote:</strong> ' + input + '</p><button class="btn secondary" onclick="tryAgainWriting()">Try Another Sentence</button></div>';
-                }
-            });
-        }
-        
-        function tryAgainWriting() {
-            fetch('/writing_next', { method: 'POST' })
-                .then(() => location.reload());
-        }
-        
-        function goHome() {
-            fetch('/restart', { method: 'POST' })
-                .then(() => location.reload());
-        }
-    </script>
 </body>
 </html>
 '''
 
 @app.route('/')
-def index():
-    current_question = None
-    if session.get('test_started') and not session.get('test_completed') and session.get('test_type') == 'civics':
-        question_index = session.get('current_question_index')
-        if question_index is not None:
-            current_question = session.get('questions')[question_index]
-    
-    return render_template_string(HTML_TEMPLATE, 
-                                current_question=current_question,
-                                enumerate=enumerate)
+def home():
+    return render_template_string(HTML_TEMPLATE, page='home')
 
-@app.route('/start', methods=['POST'])
-def start_test():
-    data = request.get_json()
-    test_type = data.get('test_type', 'civics')
-    
-    # Reset session
-    session.clear()
-    session['test_started'] = True
-    session['test_completed'] = False
-    session['test_type'] = test_type
-    
-    if test_type == 'civics':
-        # Select 10 random civics questions
-        selected_questions = random.sample(CIVICS_QUESTIONS, 10)
-        session['questions'] = selected_questions
-        session['current_question'] = 1
-        session['current_question_index'] = 0
-        session['total_questions'] = 10
-        session['correct_answers'] = 0
-    
-    elif test_type == 'reading':
-        # Select 3 random reading sentences
-        selected_sentences = random.sample(READING_SENTENCES, 3)
-        session['reading_sentences'] = selected_sentences
-        session['reading_attempt'] = 0
-        session['reading_passed'] = False
+@app.route('/civics', methods=['GET', 'POST'])
+def civics_test():
+    if request.method == 'GET':
+        # Select 10 random questions
+        question_numbers = random.sample(range(1, 101), 10)
+        session['test_questions'] = question_numbers
         
-    elif test_type == 'writing':
-        # Select 3 random writing sentences
-        selected_sentences = random.sample(WRITING_SENTENCES, 3)
-        session['writing_sentences'] = selected_sentences
-        session['writing_attempt'] = 0
-        session['writing_passed'] = False
+        questions = []
+        for num in question_numbers:
+            q = CIVICS_QUESTIONS[num]
+            # Shuffle answers and add some wrong options for multiple choice
+            questions.append({
+                'number': num,
+                'question': q['question'],
+                'answers': q['answers'][:4] if len(q['answers']) > 3 else q['answers'],  # Limit to 4 options
+                'correct': q['correct']
+            })
+        
+        return render_template_string(HTML_TEMPLATE, page='civics', questions=questions)
     
-    return '', 200
-
-@app.route('/answer', methods=['POST'])
-def check_answer():
-    data = request.get_json()
-    selected_answer = data.get('answer')
-    
-    current_question_index = session.get('current_question_index')
-    current_question = session.get('questions')[current_question_index]
-    
-    is_correct = selected_answer == current_question['correct']
-    
-    if is_correct:
-        session['correct_answers'] = session.get('correct_answers', 0) + 1
-    
-    return jsonify({
-        'correct': is_correct,
-        'correct_answer': current_question['correct']
-    })
-
-@app.route('/next', methods=['POST'])
-def next_question():
-    current_question = session.get('current_question', 1)
-    total_questions = session.get('total_questions', 10)
-    
-    if current_question >= total_questions:
-        session['test_completed'] = True
     else:
-        session['current_question'] = current_question + 1
-        session['current_question_index'] = session.get('current_question_index', 0) + 1
-    
-    return '', 200
+        # Grade the test
+        question_numbers = session.get('test_questions', [])
+        score = 0
+        results = []
+        
+        for i, num in enumerate(question_numbers):
+            user_answer = request.form.get(f'q{i}', '').strip()
+            correct_answer = CIVICS_QUESTIONS[num]['correct']
+            question_text = CIVICS_QUESTIONS[num]['question']
+            
+            # Check if answer is correct (case insensitive, flexible matching)
+            is_correct = False
+            for possible_answer in CIVICS_QUESTIONS[num]['answers']:
+                if user_answer.lower().strip() in possible_answer.lower() or possible_answer.lower().strip() in user_answer.lower():
+                    is_correct = True
+                    break
+            
+            if is_correct:
+                score += 1
+            
+            results.append({
+                'question': question_text,
+                'user_answer': user_answer,
+                'correct_answer': correct_answer,
+                'correct': is_correct
+            })
+        
+        passed = score >= 6
+        return render_template_string(HTML_TEMPLATE, page='civics_result', 
+                                    score=score, passed=passed, results=results)
 
-@app.route('/reading_result', methods=['POST'])
-def reading_result():
-    data = request.get_json()
-    success = data.get('success', False)
+@app.route('/english', methods=['GET', 'POST'])
+def english_test():
+    if request.method == 'GET':
+        # Select 3 random sentences for each component
+        reading_sentences = random.sample(READING_SENTENCES, 3)
+        writing_sentences = random.sample(WRITING_SENTENCES, 3)
+        
+        session['reading_sentences'] = reading_sentences
+        session['writing_sentences'] = writing_sentences
+        
+        return render_template_string(HTML_TEMPLATE, page='english', 
+                                    reading_sentences=reading_sentences,
+                                    writing_sentences=writing_sentences)
     
-    if success:
-        session['reading_passed'] = True
-        session['test_completed'] = True
     else:
-        attempt = session.get('reading_attempt', 0)
-        if attempt >= 2:  # Failed all 3 attempts
-            session['test_completed'] = True
-        else:
-            session['reading_attempt'] = attempt + 1
-    
-    return '', 200
-
-@app.route('/check_writing', methods=['POST'])
-def check_writing():
-    data = request.get_json()
-    written_text = data.get('written_text', '').strip()
-    
-    attempt = session.get('writing_attempt', 0)
-    expected_sentence = session.get('writing_sentences')[attempt]
-    
-    # Simple comparison (case-insensitive, basic punctuation)
-    is_correct = written_text.lower().replace('.', '').replace(',', '') == expected_sentence.lower().replace('.', '').replace(',', '')
-    
-    if is_correct:
-        session['writing_passed'] = True
-        session['test_completed'] = True
-    
-    return jsonify({
-        'correct': is_correct,
-        'expected': expected_sentence
-    })
-
-@app.route('/writing_next', methods=['POST'])
-def writing_next():
-    attempt = session.get('writing_attempt', 0)
-    if attempt >= 2:  # Failed all 3 attempts
-        session['test_completed'] = True
-    else:
-        session['writing_attempt'] = attempt + 1
-    
-    return '', 200
-
-@app.route('/restart', methods=['POST'])
-def restart_test():
-    session.clear()
-    return '', 200
+        # Grade the test
+        reading_sentence = request.form.get('reading', '').strip()
+        writing_choice = request.form.get('writing_choice', '').strip()
+        writing_text = request.form.get('writing_text', '').strip()
+        
+        # Reading test: just need to select a sentence
+        reading_passed = reading_sentence in session.get('reading_sentences', [])
+        
+        # Writing test: must match exactly
+        writing_passed = writing_choice == writing_text
+        
+        overall_passed = reading_passed and writing_passed
+        
+        return render_template_string(HTML_TEMPLATE, page='english_result',
+                                    reading_passed=reading_passed,
+                                    writing_passed=writing_passed,
+                                    overall_passed=overall_passed,
+                                    reading_sentence=reading_sentence,
+                                    writing_target=writing_choice,
+                                    writing_response=writing_text)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(debug=True)
