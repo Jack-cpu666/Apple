@@ -7,6 +7,64 @@ app.secret_key = 'your-secret-key-change-this'
 # Add enumerate to Jinja2 environment
 app.jinja_env.globals.update(enumerate=enumerate)
 
+# Function to generate multiple choice options for questions with single answers
+def generate_multiple_choice(question_id, correct_answer, all_answers):
+    # Common wrong answers for different types of questions
+    wrong_answers_pool = {
+        'numbers': ['fifty (50)', 'one hundred (100)', 'twenty-five (25)', 'fifteen (15)', 'thirty (30)', 'seventy-five (75)'],
+        'people': ['Thomas Jefferson', 'Benjamin Franklin', 'John Adams', 'Alexander Hamilton', 'James Madison', 'Theodore Roosevelt'],
+        'documents': ['the Declaration of Independence', 'the Articles of Confederation', 'the Federalist Papers', 'the Bill of Rights'],
+        'branches': ['the Senate', 'the House of Representatives', 'the Supreme Court', 'the Cabinet'],
+        'wars': ['Revolutionary War', 'War of 1812', 'Mexican-American War', 'Spanish-American War', 'Vietnam War'],
+        'places': ['New York', 'Philadelphia', 'Boston', 'Chicago', 'Los Angeles', 'Virginia'],
+        'months': ['January', 'March', 'May', 'September', 'December'],
+        'general': ['the President', 'Congress', 'the Constitution', 'the Supreme Court', 'the Bill of Rights']
+    }
+    
+    # If we already have multiple answers, use them
+    if len(all_answers) >= 4:
+        return all_answers[:4]
+    
+    # Generate wrong answers based on question content
+    question_text = CIVICS_QUESTIONS[question_id]['question'].lower()
+    options = [correct_answer]
+    
+    # Add wrong answers based on question type
+    if 'how many' in question_text or 'years' in question_text:
+        wrong_pool = wrong_answers_pool['numbers']
+    elif 'president' in question_text or 'who' in question_text:
+        wrong_pool = wrong_answers_pool['people']
+    elif 'war' in question_text:
+        wrong_pool = wrong_answers_pool['wars']
+    elif 'month' in question_text:
+        wrong_pool = wrong_answers_pool['months']
+    elif 'where' in question_text or 'capital' in question_text:
+        wrong_pool = wrong_answers_pool['places']
+    else:
+        wrong_pool = wrong_answers_pool['general']
+    
+    # Add wrong answers that don't match the correct answer
+    for wrong in wrong_pool:
+        if wrong.lower() != correct_answer.lower() and len(options) < 4:
+            options.append(wrong)
+    
+    # If still need more options, add from general pool
+    if len(options) < 4:
+        for wrong in wrong_answers_pool['general']:
+            if wrong.lower() != correct_answer.lower() and wrong not in options and len(options) < 4:
+                options.append(wrong)
+    
+    # If still need more, add some generic options
+    generic_options = ['the states', 'the people', 'the government', 'the courts', 'the military']
+    for option in generic_options:
+        if option.lower() != correct_answer.lower() and option not in options and len(options) < 4:
+            options.append(option)
+    
+    # Shuffle the options so correct answer isn't always first
+    random.shuffle(options)
+    
+    return options[:4]
+
 # All 100 civics questions and answers from the official USCIS study guide
 CIVICS_QUESTIONS = {
     1: {
@@ -1477,17 +1535,31 @@ def civics_question(question_num):
         return redirect('/civics/results')
     
     question_id = session['test_questions'][question_num]
-    question = CIVICS_QUESTIONS[question_id]
+    question_data = CIVICS_QUESTIONS[question_id]
+    
+    # Generate multiple choice options
+    multiple_choice_options = generate_multiple_choice(
+        question_id, 
+        question_data['correct'], 
+        question_data['answers']
+    )
+    
+    # Create question object with multiple choice options
+    question = {
+        'question': question_data['question'],
+        'answers': multiple_choice_options,
+        'correct': question_data['correct']
+    }
     
     feedback = None
     
     if request.method == 'POST':
         user_answer = request.form.get('answer', '').strip()
-        correct_answer = question['correct']
+        correct_answer = question_data['correct']
         
         # Check if answer is correct (flexible matching)
         is_correct = False
-        for possible_answer in question['answers']:
+        for possible_answer in question_data['answers']:
             if (user_answer.lower().strip() in possible_answer.lower() or 
                 possible_answer.lower().strip() in user_answer.lower() or
                 user_answer.lower().strip() == possible_answer.lower().strip()):
@@ -1500,7 +1572,7 @@ def civics_question(question_num):
         # Store the answer
         session['answers'] = session.get('answers', [])
         session['answers'].append({
-            'question': question['question'],
+            'question': question_data['question'],
             'user_answer': user_answer,
             'correct_answer': correct_answer,
             'correct': is_correct,
