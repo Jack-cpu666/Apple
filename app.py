@@ -1037,10 +1037,154 @@ HTML_TEMPLATE = '''
         }
         
         @media (max-width: 768px) {
-            .content { padding: 25px; }
-            .header h1 { font-size: 2em; }
-            .question-text { font-size: 1.2em; }
-            .home-cards { grid-template-columns: 1fr; }
+            body { 
+                padding: 10px;
+                font-size: 14px;
+            }
+            
+            .container {
+                margin: 0;
+                border-radius: 16px;
+            }
+            
+            .header {
+                padding: 25px 20px;
+            }
+            
+            .header h1 { 
+                font-size: 2em; 
+                line-height: 1.2;
+            }
+            
+            .header p {
+                font-size: 1em;
+            }
+            
+            .content { 
+                padding: 20px;
+            }
+            
+            .test-section {
+                padding: 25px 20px;
+                margin-bottom: 20px;
+            }
+            
+            .test-section h2 {
+                font-size: 1.8em;
+                line-height: 1.3;
+            }
+            
+            .question-card {
+                padding: 25px 20px;
+                margin: 20px 0;
+            }
+            
+            .question-text { 
+                font-size: 1.3em;
+                line-height: 1.5;
+                word-wrap: break-word;
+            }
+            
+            .answer-option {
+                padding: 18px 20px;
+                font-size: 1.1em;
+                line-height: 1.4;
+                word-wrap: break-word;
+                white-space: normal;
+                text-align: left;
+            }
+            
+            .answer-option span:last-child {
+                flex: 1;
+                min-width: 0;
+                word-break: break-word;
+            }
+            
+            .answer-letter {
+                width: 30px;
+                height: 30px;
+                font-size: 0.9em;
+                flex-shrink: 0;
+            }
+            
+            .btn {
+                padding: 15px 25px;
+                font-size: 1.1em;
+                margin: 8px 5px;
+                width: auto;
+                min-width: 120px;
+            }
+            
+            .home-cards { 
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+            
+            .home-card {
+                padding: 30px 20px;
+            }
+            
+            .progress-container {
+                padding: 20px;
+                margin: 20px 0;
+            }
+            
+            .progress-text {
+                font-size: 1em;
+            }
+            
+            .feedback {
+                padding: 25px 20px;
+                font-size: 1.1em;
+            }
+            
+            .feedback-icon {
+                font-size: 1.8em;
+            }
+            
+            .final-score {
+                padding: 30px 20px;
+            }
+            
+            .score-circle {
+                width: 120px;
+                height: 120px;
+                font-size: 2em;
+            }
+            
+            .correct-answer {
+                padding: 15px;
+                font-size: 1em;
+                line-height: 1.4;
+                word-wrap: break-word;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .header h1 {
+                font-size: 1.8em;
+            }
+            
+            .question-text {
+                font-size: 1.2em;
+            }
+            
+            .answer-option {
+                padding: 15px 18px;
+                font-size: 1em;
+            }
+            
+            .btn {
+                padding: 12px 20px;
+                font-size: 1em;
+                margin: 5px 3px;
+            }
+            
+            .score-circle {
+                width: 100px;
+                height: 100px;
+                font-size: 1.8em;
+            }
         }
     </style>
 </head>
