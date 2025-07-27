@@ -1,1741 +1,434 @@
-from flask import Flask, render_template_string, request, session, redirect, url_for
-import random
+import os
+import ast
+import zipfile
+from io import BytesIO
+from textwrap import dedent
 
-app = Flask(__name__)
-app.secret_key = 'your-secret-key-change-this'
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.responses import HTMLResponse, StreamingResponse
 
-# Add enumerate to Jinja2 environment
-app.jinja_env.globals.update(enumerate=enumerate)
+# Helper to unparse AST nodes back to code, available in Python 3.9+
+# For older versions, an external library like astor would be needed.
+unparse = ast.unparse
 
-# Function to generate contextually appropriate multiple choice options
-def generate_multiple_choice(question_id, correct_answer, all_answers):
-    # If we already have multiple answers, use them
-    if len(all_answers) >= 4:
-        return all_answers[:4]
-    
-    # Specific wrong answers for each type of question based on the actual test content
-    question_text = CIVICS_QUESTIONS[question_id]['question'].lower()
-    options = [correct_answer]
-    
-    # Question-specific wrong answers that make contextual sense
-    specific_wrong_answers = {
-        # Who lived in America before Europeans
-        59: ["Europeans", "Spanish colonists", "English settlers"],
-        
-        # What is supreme law
-        1: ["Declaration of Independence", "Bill of Rights", "Articles of Confederation"],
-        
-        # How many amendments
-        7: ["twenty-five (25)", "thirty (30)", "fifty (50)"],
-        
-        # How many senators
-        18: ["fifty (50)", "four hundred thirty-five (435)", "two hundred (200)"],
-        
-        # How many representatives
-        21: ["one hundred (100)", "fifty (50)", "two hundred (200)"],
-        
-        # President term
-        26: ["two (2)", "six (6)", "eight (8)"],
-        
-        # Senator term
-        19: ["two (2)", "four (4)", "eight (8)"],
-        
-        # Representative term
-        22: ["four (4)", "six (6)", "one (1)"],
-        
-        # Voting age
-        54: ["sixteen (16)", "twenty-one (21)", "twenty-five (25)"],
-        
-        # Who is Commander in Chief
-        32: ["Secretary of Defense", "Chairman of Joint Chiefs", "Congress"],
-        
-        # Who signs bills
-        33: ["Speaker of the House", "Chief Justice", "Vice President"],
-        
-        # Who vetoes bills
-        34: ["Congress", "Supreme Court", "Speaker of the House"],
-        
-        # What does Constitution do
-        2: ["declares independence", "creates political parties", "establishes religion"],
-        
-        # First three words
-        3: ["All men created", "When in the", "In order to"],
-        
-        # What is amendment
-        4: ["a law", "a treaty", "a court decision"],
-        
-        # First 10 amendments
-        5: ["the Constitution", "the Declaration", "the Articles"],
-        
-        # Economic system
-        11: ["socialist economy", "communist economy", "mixed economy"],
-        
-        # Rule of law
-        12: ["Only citizens follow law", "Rich people above law", "President above law"],
-        
-        # Branches of government
-        13: ["the people", "the states", "the military"],
-        
-        # Checks and balances
-        14: ["federalism", "popular sovereignty", "judicial review"],
-        
-        # Who makes federal laws
-        16: ["the President", "the Supreme Court", "the states"],
-        
-        # Two parts of Congress
-        17: ["House and Cabinet", "Senate and Cabinet", "President and Vice President"],
-        
-        # What stops one branch from becoming too powerful
-        14: ["the people", "elections", "the media"],
-        
-        # Month we vote for President
-        27: ["October", "December", "January"],
-        
-        # Political parties
-        45: ["Republican and Independent", "Democratic and Green", "Liberal and Conservative"],
-        
-        # Independence Day
-        99: ["July 3", "August 4", "June 4"],
-        
-        # National anthem
-        98: ["America the Beautiful", "God Bless America", "My Country Tis of Thee"],
-        
-        # Longest rivers
-        88: ["Colorado River", "Rio Grande", "Hudson River"],
-        
-        # West Coast ocean
-        89: ["Atlantic Ocean", "Gulf of Mexico", "Arctic Ocean"],
-        
-        # East Coast ocean
-        90: ["Pacific Ocean", "Gulf of Mexico", "Arctic Ocean"],
-        
-        # Capital of US
-        94: ["New York", "Philadelphia", "Boston"],
-        
-        # Statue of Liberty
-        95: ["Washington D.C.", "Boston Harbor", "Philadelphia"],
-        
-        # Flag stripes
-        96: ["because of 13 colonies", "because of 50 states", "because of founding fathers"],
-        
-        # Flag stars
-        97: ["because of original colonies", "because of amendments", "because of presidents"],
-    }
-    
-    # Get specific wrong answers for this question
-    if question_id in specific_wrong_answers:
-        wrong_answers = specific_wrong_answers[question_id]
-    else:
-        # Generic wrong answers based on question type
-        if 'how many' in question_text and ('year' in question_text or 'term' in question_text):
-            wrong_answers = ["two (2)", "six (6)", "eight (8)"]
-        elif 'how many' in question_text:
-            wrong_answers = ["twenty-five (25)", "fifty (50)", "one hundred (100)"]
-        elif 'who' in question_text and 'president' in question_text:
-            wrong_answers = ["Congress", "Supreme Court", "Vice President"]
-        elif 'what' in question_text and ('do' in question_text or 'does' in question_text):
-            wrong_answers = ["makes laws", "interprets laws", "enforces laws"]
-        elif 'when' in question_text or 'month' in question_text:
-            wrong_answers = ["January", "March", "September"]
-        elif 'where' in question_text:
-            wrong_answers = ["New York", "Philadelphia", "Boston"]
-        else:
-            wrong_answers = ["the states", "the people", "the courts"]
-    
-    # Add wrong answers
-    for wrong in wrong_answers:
-        if wrong.lower() != correct_answer.lower() and len(options) < 4:
-            options.append(wrong)
-    
-    # If we still need more options, add generic ones
-    if len(options) < 4:
-        generic_options = ["the government", "the military", "the courts", "the states"]
-        for option in generic_options:
-            if option.lower() != correct_answer.lower() and option not in options and len(options) < 4:
-                options.append(option)
-    
-    # Shuffle the options so correct answer isn't always first
-    random.shuffle(options)
-    
-    return options[:4]
+# --- Main Application ---
+app = FastAPI(
+    title="Monolith to Microservice Converter",
+    description="Upload your monolithic FastAPI script to convert it into a structured project."
+)
 
-# All 100 civics questions and answers from the official USCIS study guide
-CIVICS_QUESTIONS = {
-    1: {
-        "question": "What is the supreme law of the land?",
-        "answers": ["the Constitution"],
-        "correct": "the Constitution"
-    },
-    2: {
-        "question": "What does the Constitution do?",
-        "answers": ["sets up the government", "defines the government", "protects basic rights of Americans"],
-        "correct": "sets up the government"
-    },
-    3: {
-        "question": "The idea of self-government is in the first three words of the Constitution. What are these words?",
-        "answers": ["We the People"],
-        "correct": "We the People"
-    },
-    4: {
-        "question": "What is an amendment?",
-        "answers": ["a change (to the Constitution)", "an addition (to the Constitution)"],
-        "correct": "a change (to the Constitution)"
-    },
-    5: {
-        "question": "What do we call the first ten amendments to the Constitution?",
-        "answers": ["the Bill of Rights"],
-        "correct": "the Bill of Rights"
-    },
-    6: {
-        "question": "What is one right or freedom from the First Amendment?",
-        "answers": ["speech", "religion", "assembly", "press", "petition the government"],
-        "correct": "speech"
-    },
-    7: {
-        "question": "How many amendments does the Constitution have?",
-        "answers": ["twenty-seven (27)"],
-        "correct": "twenty-seven"
-    },
-    8: {
-        "question": "What did the Declaration of Independence do?",
-        "answers": ["announced our independence (from Great Britain)", "declared our independence (from Great Britain)", "said that the United States is free (from Great Britain)"],
-        "correct": "announced our independence (from Great Britain)"
-    },
-    9: {
-        "question": "What are two rights in the Declaration of Independence?",
-        "answers": ["life", "liberty", "pursuit of happiness"],
-        "correct": "life and liberty"
-    },
-    10: {
-        "question": "What is freedom of religion?",
-        "answers": ["You can practice any religion, or not practice a religion."],
-        "correct": "You can practice any religion, or not practice a religion."
-    },
-    11: {
-        "question": "What is the economic system in the United States?",
-        "answers": ["capitalist economy", "market economy"],
-        "correct": "capitalist economy"
-    },
-    12: {
-        "question": "What is the \"rule of law\"?",
-        "answers": ["Everyone must follow the law.", "Leaders must obey the law.", "Government must obey the law.", "No one is above the law."],
-        "correct": "Everyone must follow the law."
-    },
-    13: {
-        "question": "Name one branch or part of the government.",
-        "answers": ["Congress", "legislative", "President", "executive", "the courts", "judicial"],
-        "correct": "Congress"
-    },
-    14: {
-        "question": "What stops one branch of government from becoming too powerful?",
-        "answers": ["checks and balances", "separation of powers"],
-        "correct": "checks and balances"
-    },
-    15: {
-        "question": "Who is in charge of the executive branch?",
-        "answers": ["the President"],
-        "correct": "the President"
-    },
-    16: {
-        "question": "Who makes federal laws?",
-        "answers": ["Congress", "Senate and House (of Representatives)", "(U.S. or national) legislature"],
-        "correct": "Congress"
-    },
-    17: {
-        "question": "What are the two parts of the U.S. Congress?",
-        "answers": ["the Senate and House (of Representatives)"],
-        "correct": "the Senate and House (of Representatives)"
-    },
-    18: {
-        "question": "How many U.S. Senators are there?",
-        "answers": ["one hundred (100)"],
-        "correct": "one hundred"
-    },
-    19: {
-        "question": "We elect a U.S. Senator for how many years?",
-        "answers": ["six (6)"],
-        "correct": "six"
-    },
-    20: {
-        "question": "Who is one of your state's U.S. Senators now?",
-        "answers": ["Answers will vary"],
-        "correct": "Answers will vary"
-    },
-    21: {
-        "question": "The House of Representatives has how many voting members?",
-        "answers": ["four hundred thirty-five (435)"],
-        "correct": "four hundred thirty-five"
-    },
-    22: {
-        "question": "We elect a U.S. Representative for how many years?",
-        "answers": ["two (2)"],
-        "correct": "two"
-    },
-    23: {
-        "question": "Name your U.S. Representative.",
-        "answers": ["Answers will vary"],
-        "correct": "Answers will vary"
-    },
-    24: {
-        "question": "Who does a U.S. Senator represent?",
-        "answers": ["all people of the state"],
-        "correct": "all people of the state"
-    },
-    25: {
-        "question": "Why do some states have more Representatives than other states?",
-        "answers": ["(because of) the state's population", "(because) they have more people", "(because) some states have more people"],
-        "correct": "because of the state's population"
-    },
-    26: {
-        "question": "We elect a President for how many years?",
-        "answers": ["four (4)"],
-        "correct": "four"
-    },
-    27: {
-        "question": "In what month do we vote for President?",
-        "answers": ["November"],
-        "correct": "November"
-    },
-    28: {
-        "question": "What is the name of the President of the United States now?",
-        "answers": ["Donald Trump"],
-        "correct": "Donald Trump"
-    },
-    29: {
-        "question": "What is the name of the Vice President of the United States now?",
-        "answers": ["J.D. Vance"],
-        "correct": "J.D. Vance"
-    },
-    30: {
-        "question": "If the President can no longer serve, who becomes President?",
-        "answers": ["the Vice President"],
-        "correct": "the Vice President"
-    },
-    31: {
-        "question": "If both the President and the Vice President can no longer serve, who becomes President?",
-        "answers": ["the Speaker of the House"],
-        "correct": "the Speaker of the House"
-    },
-    32: {
-        "question": "Who is the Commander in Chief of the military?",
-        "answers": ["the President"],
-        "correct": "the President"
-    },
-    33: {
-        "question": "Who signs bills to become laws?",
-        "answers": ["the President"],
-        "correct": "the President"
-    },
-    34: {
-        "question": "Who vetoes bills?",
-        "answers": ["the President"],
-        "correct": "the President"
-    },
-    35: {
-        "question": "What does the President's Cabinet do?",
-        "answers": ["advises the President"],
-        "correct": "advises the President"
-    },
-    36: {
-        "question": "What are two Cabinet-level positions?",
-        "answers": ["Secretary of Agriculture", "Secretary of Commerce", "Secretary of Defense", "Secretary of Education", "Secretary of Energy", "Secretary of Health and Human Services", "Secretary of Homeland Security", "Secretary of Housing and Urban Development", "Secretary of the Interior", "Secretary of Labor", "Secretary of State", "Secretary of Transportation", "Secretary of the Treasury", "Secretary of Veterans Affairs", "Attorney General", "Vice President"],
-        "correct": "Secretary of State and Secretary of Defense"
-    },
-    37: {
-        "question": "What does the judicial branch do?",
-        "answers": ["reviews laws", "explains laws", "resolves disputes (disagreements)", "decides if a law goes against the Constitution"],
-        "correct": "reviews laws"
-    },
-    38: {
-        "question": "What is the highest court in the United States?",
-        "answers": ["the Supreme Court"],
-        "correct": "the Supreme Court"
-    },
-    39: {
-        "question": "How many justices are on the Supreme Court?",
-        "answers": ["nine (9)"],
-        "correct": "nine"
-    },
-    40: {
-        "question": "Who is the Chief Justice of the United States now?",
-        "answers": ["John Roberts"],
-        "correct": "John Roberts"
-    },
-    41: {
-        "question": "Under our Constitution, some powers belong to the federal government. What is one power of the federal government?",
-        "answers": ["to print money", "to declare war", "to create an army", "to make treaties"],
-        "correct": "to print money"
-    },
-    42: {
-        "question": "Under our Constitution, some powers belong to the states. What is one power of the states?",
-        "answers": ["provide schooling and education", "provide protection (police)", "provide safety (fire departments)", "give a driver's license", "approve zoning and land use"],
-        "correct": "provide schooling and education"
-    },
-    43: {
-        "question": "Who is the Governor of your state now?",
-        "answers": ["Answers will vary"],
-        "correct": "Answers will vary"
-    },
-    44: {
-        "question": "What is the capital of your state?",
-        "answers": ["Answers will vary"],
-        "correct": "Answers will vary"
-    },
-    45: {
-        "question": "What are the two major political parties in the United States?",
-        "answers": ["Democratic and Republican"],
-        "correct": "Democratic and Republican"
-    },
-    46: {
-        "question": "What is the political party of the President now?",
-        "answers": ["Republican"],
-        "correct": "Republican"
-    },
-    47: {
-        "question": "What is the name of the Speaker of the House of Representatives now?",
-        "answers": ["Mike Johnson"],
-        "correct": "Mike Johnson"
-    },
-    48: {
-        "question": "There are four amendments to the Constitution about who can vote. Describe one of them.",
-        "answers": ["Citizens eighteen (18) and older (can vote).", "You don't have to pay (a poll tax) to vote.", "Any citizen can vote. (Women and men can vote.)", "A male citizen of any race (can vote)."],
-        "correct": "Citizens eighteen (18) and older (can vote)."
-    },
-    49: {
-        "question": "What is one responsibility that is only for United States citizens?",
-        "answers": ["serve on a jury", "vote in a federal election"],
-        "correct": "serve on a jury"
-    },
-    50: {
-        "question": "Name one right only for United States citizens.",
-        "answers": ["vote in a federal election", "run for federal office"],
-        "correct": "vote in a federal election"
-    },
-    51: {
-        "question": "What are two rights of everyone living in the United States?",
-        "answers": ["freedom of expression", "freedom of speech", "freedom of assembly", "freedom to petition the government", "freedom of religion", "the right to bear arms"],
-        "correct": "freedom of speech and freedom of religion"
-    },
-    52: {
-        "question": "What do we show loyalty to when we say the Pledge of Allegiance?",
-        "answers": ["the United States", "the flag"],
-        "correct": "the United States"
-    },
-    53: {
-        "question": "What is one promise you make when you become a United States citizen?",
-        "answers": ["give up loyalty to other countries", "defend the Constitution and laws of the United States", "obey the laws of the United States", "serve in the U.S. military (if needed)", "serve (do important work for) the nation (if needed)", "be loyal to the United States"],
-        "correct": "give up loyalty to other countries"
-    },
-    54: {
-        "question": "How old do citizens have to be to vote for President?",
-        "answers": ["eighteen (18) and older"],
-        "correct": "eighteen"
-    },
-    55: {
-        "question": "What are two ways that Americans can participate in their democracy?",
-        "answers": ["vote", "join a political party", "help with a campaign", "join a civic group", "join a community group", "give an elected official your opinion on an issue", "call Senators and Representatives", "publicly support or oppose an issue or policy", "run for office", "write to a newspaper"],
-        "correct": "vote and join a political party"
-    },
-    56: {
-        "question": "When is the last day you can send in federal income tax forms?",
-        "answers": ["April 15"],
-        "correct": "April 15"
-    },
-    57: {
-        "question": "When must all men register for the Selective Service?",
-        "answers": ["at age eighteen (18)", "between eighteen (18) and twenty-six (26)"],
-        "correct": "at age eighteen"
-    },
-    58: {
-        "question": "What is one reason colonists came to America?",
-        "answers": ["freedom", "political liberty", "religious freedom", "economic opportunity", "practice their religion", "escape persecution"],
-        "correct": "freedom"
-    },
-    59: {
-        "question": "Who lived in America before the Europeans arrived?",
-        "answers": ["American Indians", "Native Americans"],
-        "correct": "American Indians"
-    },
-    60: {
-        "question": "What group of people was taken to America and sold as slaves?",
-        "answers": ["Africans", "people from Africa"],
-        "correct": "Africans"
-    },
-    61: {
-        "question": "Why did the colonists fight the British?",
-        "answers": ["because of high taxes (taxation without representation)", "because the British army stayed in their houses (boarding, quartering)", "because they didn't have self-government"],
-        "correct": "because of high taxes"
-    },
-    62: {
-        "question": "Who wrote the Declaration of Independence?",
-        "answers": ["(Thomas) Jefferson"],
-        "correct": "Thomas Jefferson"
-    },
-    63: {
-        "question": "When was the Declaration of Independence adopted?",
-        "answers": ["July 4, 1776"],
-        "correct": "July 4, 1776"
-    },
-    64: {
-        "question": "There were 13 original states. Name three.",
-        "answers": ["New Hampshire", "Massachusetts", "Rhode Island", "Connecticut", "New York", "New Jersey", "Pennsylvania", "Delaware", "Maryland", "Virginia", "North Carolina", "South Carolina", "Georgia"],
-        "correct": "New York, New Jersey, and Pennsylvania"
-    },
-    65: {
-        "question": "What happened at the Constitutional Convention?",
-        "answers": ["The Constitution was written.", "The Founding Fathers wrote the Constitution."],
-        "correct": "The Constitution was written."
-    },
-    66: {
-        "question": "When was the Constitution written?",
-        "answers": ["1787"],
-        "correct": "1787"
-    },
-    67: {
-        "question": "The Federalist Papers supported the passage of the U.S. Constitution. Name one of the writers.",
-        "answers": ["(James) Madison", "(Alexander) Hamilton", "(John) Jay", "Publius"],
-        "correct": "James Madison"
-    },
-    68: {
-        "question": "What is one thing Benjamin Franklin is famous for?",
-        "answers": ["U.S. diplomat", "oldest member of the Constitutional Convention", "first Postmaster General of the United States", "writer of \"Poor Richard's Almanac\"", "started the first free libraries"],
-        "correct": "U.S. diplomat"
-    },
-    69: {
-        "question": "Who is the \"Father of Our Country\"?",
-        "answers": ["(George) Washington"],
-        "correct": "George Washington"
-    },
-    70: {
-        "question": "Who was the first President?",
-        "answers": ["(George) Washington"],
-        "correct": "George Washington"
-    },
-    71: {
-        "question": "What territory did the United States buy from France in 1803?",
-        "answers": ["the Louisiana Territory", "Louisiana"],
-        "correct": "the Louisiana Territory"
-    },
-    72: {
-        "question": "Name one war fought by the United States in the 1800s.",
-        "answers": ["War of 1812", "Mexican-American War", "Civil War", "Spanish-American War"],
-        "correct": "Civil War"
-    },
-    73: {
-        "question": "Name the U.S. war between the North and the South.",
-        "answers": ["the Civil War", "the War between the States"],
-        "correct": "the Civil War"
-    },
-    74: {
-        "question": "Name one problem that led to the Civil War.",
-        "answers": ["slavery", "economic reasons", "states' rights"],
-        "correct": "slavery"
-    },
-    75: {
-        "question": "What was one important thing that Abraham Lincoln did?",
-        "answers": ["freed the slaves (Emancipation Proclamation)", "saved (or preserved) the Union", "led the United States during the Civil War"],
-        "correct": "freed the slaves"
-    },
-    76: {
-        "question": "What did the Emancipation Proclamation do?",
-        "answers": ["freed the slaves", "freed slaves in the Confederacy", "freed slaves in the Confederate states", "freed slaves in most Southern states"],
-        "correct": "freed the slaves"
-    },
-    77: {
-        "question": "What did Susan B. Anthony do?",
-        "answers": ["fought for women's rights", "fought for civil rights"],
-        "correct": "fought for women's rights"
-    },
-    78: {
-        "question": "Name one war fought by the United States in the 1900s.",
-        "answers": ["World War I", "World War II", "Korean War", "Vietnam War", "(Persian) Gulf War"],
-        "correct": "World War II"
-    },
-    79: {
-        "question": "Who was President during World War I?",
-        "answers": ["(Woodrow) Wilson"],
-        "correct": "Woodrow Wilson"
-    },
-    80: {
-        "question": "Who was President during the Great Depression and World War II?",
-        "answers": ["(Franklin) Roosevelt"],
-        "correct": "Franklin Roosevelt"
-    },
-    81: {
-        "question": "Who did the United States fight in World War II?",
-        "answers": ["Japan, Germany, and Italy"],
-        "correct": "Japan, Germany, and Italy"
-    },
-    82: {
-        "question": "Before he was President, Eisenhower was a general. What war was he in?",
-        "answers": ["World War II"],
-        "correct": "World War II"
-    },
-    83: {
-        "question": "During the Cold War, what was the main concern of the United States?",
-        "answers": ["Communism"],
-        "correct": "Communism"
-    },
-    84: {
-        "question": "What movement tried to end racial discrimination?",
-        "answers": ["civil rights (movement)"],
-        "correct": "civil rights movement"
-    },
-    85: {
-        "question": "What did Martin Luther King, Jr. do?",
-        "answers": ["fought for civil rights", "worked for equality for all Americans"],
-        "correct": "fought for civil rights"
-    },
-    86: {
-        "question": "What major event happened on September 11, 2001, in the United States?",
-        "answers": ["Terrorists attacked the United States."],
-        "correct": "Terrorists attacked the United States."
-    },
-    87: {
-        "question": "Name one American Indian tribe in the United States.",
-        "answers": ["Cherokee", "Navajo", "Sioux", "Chippewa", "Choctaw", "Pueblo", "Apache", "Iroquois", "Creek", "Blackfeet", "Seminole", "Cheyenne", "Arawak", "Shawnee", "Mohegan", "Huron", "Oneida", "Lakota", "Crow", "Teton", "Hopi", "Inuit"],
-        "correct": "Cherokee"
-    },
-    88: {
-        "question": "Name one of the two longest rivers in the United States.",
-        "answers": ["Missouri (River)", "Mississippi (River)"],
-        "correct": "Mississippi River"
-    },
-    89: {
-        "question": "What ocean is on the West Coast of the United States?",
-        "answers": ["Pacific (Ocean)"],
-        "correct": "Pacific Ocean"
-    },
-    90: {
-        "question": "What ocean is on the East Coast of the United States?",
-        "answers": ["Atlantic (Ocean)"],
-        "correct": "Atlantic Ocean"
-    },
-    91: {
-        "question": "Name one U.S. territory.",
-        "answers": ["Puerto Rico", "U.S. Virgin Islands", "American Samoa", "Northern Mariana Islands", "Guam"],
-        "correct": "Puerto Rico"
-    },
-    92: {
-        "question": "Name one state that borders Canada.",
-        "answers": ["Maine", "New Hampshire", "Vermont", "New York", "Pennsylvania", "Ohio", "Michigan", "Minnesota", "North Dakota", "Montana", "Idaho", "Washington", "Alaska"],
-        "correct": "New York"
-    },
-    93: {
-        "question": "Name one state that borders Mexico.",
-        "answers": ["California", "Arizona", "New Mexico", "Texas"],
-        "correct": "California"
-    },
-    94: {
-        "question": "What is the capital of the United States?",
-        "answers": ["Washington, D.C."],
-        "correct": "Washington, D.C."
-    },
-    95: {
-        "question": "Where is the Statue of Liberty?",
-        "answers": ["New York (Harbor)", "Liberty Island"],
-        "correct": "New York Harbor"
-    },
-    96: {
-        "question": "Why does the flag have 13 stripes?",
-        "answers": ["because there were 13 original colonies", "because the stripes represent the original colonies"],
-        "correct": "because there were 13 original colonies"
-    },
-    97: {
-        "question": "Why does the flag have 50 stars?",
-        "answers": ["because there is one star for each state", "because each star represents a state", "because there are 50 states"],
-        "correct": "because there are 50 states"
-    },
-    98: {
-        "question": "What is the name of the national anthem?",
-        "answers": ["The Star-Spangled Banner"],
-        "correct": "The Star-Spangled Banner"
-    },
-    99: {
-        "question": "When do we celebrate Independence Day?",
-        "answers": ["July 4"],
-        "correct": "July 4"
-    },
-    100: {
-        "question": "Name two national U.S. holidays.",
-        "answers": ["New Year's Day", "Martin Luther King, Jr. Day", "Presidents' Day", "Memorial Day", "Independence Day", "Labor Day", "Columbus Day", "Veterans Day", "Thanksgiving", "Christmas"],
-        "correct": "Independence Day and Thanksgiving"
-    }
-}
+# --- Static Content (HTML Templates, etc.) ---
 
-# Reading vocabulary sentences
-READING_SENTENCES = [
-    "America is the land of freedom.",
-    "Citizens have the right to vote.",
-    "George Washington was the first President.",
-    "The American flag has stars and stripes.",
-    "Congress makes the laws.",
-    "We celebrate Independence Day on July 4.",
-    "The President lives in the White House.",
-    "Abraham Lincoln was a great President.",
-    "The Bill of Rights protects our freedoms.",
-    "The United States has fifty states."
-]
-
-# Writing vocabulary sentences
-WRITING_SENTENCES = [
-    "America is a free country.",
-    "Citizens can vote for President.",
-    "George Washington was the Father of Our Country.",
-    "The flag is red, white, and blue.",
-    "Congress meets in Washington, D.C.",
-    "We celebrate freedom on Independence Day.",
-    "Lincoln freed the slaves.",
-    "The President lives in the White House.",
-    "Citizens have rights and freedoms.",
-    "The United States has fifty states and Washington, D.C."
-]
-
-HTML_TEMPLATE = '''
+HOME_PAGE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>U.S. Naturalization Test Practice</title>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <title>StreamBeatz Code Restructurer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-        
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-            position: relative;
-            overflow-x: hidden;
+            font-family: 'Inter', sans-serif;
+            background-color: #0a0a0a;
+            color: #e5e7eb;
         }
-        
-        body::before {
-            content: '';
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="50" cy="50" r="1" fill="rgba(255,255,255,0.1)"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>');
-            pointer-events: none;
-            z-index: -1;
-        }
-        
-        .stars {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: -1;
-        }
-        
-        .star {
-            position: absolute;
-            color: rgba(255, 255, 255, 0.8);
-            animation: twinkle 3s infinite;
-        }
-        
-        @keyframes twinkle {
-            0%, 100% { opacity: 0.3; transform: scale(1); }
-            50% { opacity: 1; transform: scale(1.2); }
-        }
-        
-        .container {
-            max-width: 1000px;
-            margin: 0 auto;
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 24px;
-            box-shadow: 0 25px 60px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.2);
-            overflow: hidden;
-            backdrop-filter: blur(20px);
-            border: 1px solid rgba(255,255,255,0.2);
-        }
-        
-        .header {
-            background: linear-gradient(135deg, #1e3c72 0%, #c41e3a 50%, #003366 100%);
-            color: white;
-            padding: 40px;
-            text-align: center;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .header::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            left: -50%;
-            width: 200%;
-            height: 200%;
-            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
-            animation: shimmer 6s infinite;
-        }
-        
-        @keyframes shimmer {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
-        .header h1 {
-            font-size: 3em;
-            margin-bottom: 10px;
-            text-shadow: 2px 2px 8px rgba(0,0,0,0.5);
-            font-weight: 700;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .header p {
-            font-size: 1.3em;
-            opacity: 0.95;
-            font-weight: 500;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .content {
-            padding: 50px;
-        }
-        
-        .test-section {
-            margin-bottom: 40px;
-            padding: 40px;
-            border: none;
-            border-radius: 20px;
-            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-            position: relative;
-        }
-        
-        .test-section::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 4px;
-            background: linear-gradient(90deg, #c41e3a, #003366, #c41e3a);
-            border-radius: 20px 20px 0 0;
-        }
-        
-        .test-section h2 {
-            color: #1e293b;
-            margin-bottom: 30px;
-            font-size: 2.2em;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-        
-        .question-card {
-            background: white;
-            padding: 40px;
-            margin: 30px 0;
-            border-radius: 16px;
-            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
-            border: 1px solid rgba(0,0,0,0.05);
-            transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .question-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 6px;
-            background: linear-gradient(90deg, #c41e3a, #003366);
-        }
-        
-        .question-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 15px 40px rgba(0,0,0,0.15);
-        }
-        
-        .question-number {
-            display: inline-block;
-            background: linear-gradient(135deg, #c41e3a, #e74c3c);
-            color: white;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-weight: 600;
-            font-size: 0.9em;
-            margin-bottom: 20px;
-        }
-        
-        .question-text {
-            font-size: 1.4em;
-            color: #1e293b;
-            margin-bottom: 30px;
-            line-height: 1.6;
-            font-weight: 500;
-        }
-        
-        .answers-grid {
-            display: grid;
-            gap: 15px;
-            margin-top: 25px;
-        }
-        
-        .answer-option {
-            padding: 20px 25px;
-            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
-            border: 2px solid #e2e8f0;
-            border-radius: 12px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            font-size: 1.1em;
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .answer-option::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(196, 30, 58, 0.1), transparent);
-            transition: left 0.5s ease;
-        }
-        
-        .answer-option:hover {
-            background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
-            border-color: #c41e3a;
-            transform: translateX(5px);
-            box-shadow: 0 5px 15px rgba(196, 30, 58, 0.2);
-        }
-        
-        .answer-option:hover::before {
-            left: 100%;
-        }
-        
-        .answer-letter {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 35px;
-            height: 35px;
-            background: linear-gradient(135deg, #c41e3a, #e74c3c);
-            color: white;
-            border-radius: 50%;
-            font-weight: 700;
-            font-size: 1em;
-        }
-        
+        .container { max-width: 800px; margin: auto; padding: 2rem; }
+        .card { background-color: #111827; border: 1px solid #374151; border-radius: 0.75rem; }
         .btn {
-            background: linear-gradient(135deg, #c41e3a 0%, #e74c3c 100%);
-            color: white;
-            padding: 18px 35px;
-            border: none;
-            border-radius: 12px;
-            font-size: 1.2em;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            margin: 15px 10px;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 10px;
-            box-shadow: 0 6px 20px rgba(196, 30, 58, 0.3);
+            background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
+            background-size: 400% 400%;
+            animation: gradient 15s ease infinite;
+            color: white; font-weight: 600; padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem; transition: all 0.3s;
+            border: none; cursor: pointer;
         }
-        
-        .btn:hover {
-            background: linear-gradient(135deg, #a91729 0%, #c0392b 100%);
-            transform: translateY(-3px);
-            box-shadow: 0 10px 30px rgba(196, 30, 58, 0.4);
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+        .file-label {
+            border: 2px dashed #4b5563; padding: 2rem; text-align: center;
+            border-radius: 0.5rem; cursor: pointer; transition: all 0.3s;
         }
-        
-        .btn-secondary {
-            background: linear-gradient(135deg, #003366 0%, #2a5298 100%);
-            box-shadow: 0 6px 20px rgba(0, 51, 102, 0.3);
+        .file-label:hover { border-color: #6366f1; background-color: #1f2937; }
+        #spinner { display: none; }
+        @keyframes gradient {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
         }
-        
-        .btn-secondary:hover {
-            background: linear-gradient(135deg, #002244 0%, #1e3c72 100%);
-            box-shadow: 0 10px 30px rgba(0, 51, 102, 0.4);
-        }
-        
-        .progress-container {
-            margin: 30px 0;
-            background: rgba(255,255,255,0.8);
-            padding: 25px;
-            border-radius: 16px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        }
-        
-        .progress-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-        }
-        
-        .progress-text {
-            font-weight: 600;
-            color: #1e293b;
-            font-size: 1.1em;
-        }
-        
-        .progress-bar-container {
-            background: #e2e8f0;
-            border-radius: 25px;
-            height: 12px;
-            overflow: hidden;
-            position: relative;
-        }
-        
-        .progress-bar {
-            background: linear-gradient(90deg, #c41e3a, #e74c3c);
-            height: 100%;
-            transition: width 0.6s ease;
-            border-radius: 25px;
-            position: relative;
-        }
-        
-        .progress-bar::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
-            animation: progressShine 2s infinite;
-        }
-        
-        @keyframes progressShine {
-            0% { transform: translateX(-100%); }
-            100% { transform: translateX(100%); }
-        }
-        
-        .feedback {
-            margin-top: 30px;
-            padding: 30px;
-            border-radius: 16px;
-            text-align: center;
-            font-size: 1.2em;
-            font-weight: 600;
-            animation: slideIn 0.5s ease;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        @keyframes slideIn {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .feedback.correct {
-            background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
-            border: 2px solid #28a745;
-            color: #155724;
-        }
-        
-        .feedback.incorrect {
-            background: linear-gradient(135deg, #f8d7da 0%, #f1c2c6 100%);
-            border: 2px solid #dc3545;
-            color: #721c24;
-        }
-        
-        .feedback::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
-            animation: feedbackShine 2s ease-in-out;
-        }
-        
-        @keyframes feedbackShine {
-            0% { left: -100%; }
-            100% { left: 100%; }
-        }
-        
-        .feedback-icon {
-            font-size: 2em;
-            margin-bottom: 15px;
-            display: block;
-        }
-        
-        .correct-answer {
-            background: rgba(40, 167, 69, 0.1);
-            border: 2px solid #28a745;
-            color: #155724;
-            padding: 20px;
-            border-radius: 12px;
-            margin-top: 20px;
-            font-weight: 600;
-        }
-        
-        .home-cards {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 30px;
-            margin-top: 40px;
-        }
-        
-        .home-card {
-            background: white;
-            padding: 40px;
-            border-radius: 20px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-            text-align: center;
-            transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .home-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 6px;
-            background: linear-gradient(90deg, #c41e3a, #003366);
-        }
-        
-        .home-card:hover {
-            transform: translateY(-10px);
-            box-shadow: 0 20px 50px rgba(0,0,0,0.2);
-        }
-        
-        .home-card-icon {
-            font-size: 3em;
-            margin-bottom: 20px;
-            background: linear-gradient(135deg, #c41e3a, #003366);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-        
-        .home-card h3 {
-            font-size: 1.5em;
-            margin-bottom: 15px;
-            color: #1e293b;
-            font-weight: 700;
-        }
-        
-        .home-card p {
-            color: #64748b;
-            margin-bottom: 25px;
-            line-height: 1.6;
-        }
-        
-        .final-score {
-            text-align: center;
-            padding: 50px;
-            background: white;
-            border-radius: 20px;
-            margin: 30px 0;
-            box-shadow: 0 15px 40px rgba(0,0,0,0.1);
-        }
-        
-        .score-circle {
-            width: 150px;
-            height: 150px;
-            border-radius: 50%;
-            margin: 0 auto 30px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 2.5em;
-            font-weight: 700;
-            color: white;
-        }
-        
-        .score-circle.pass {
-            background: linear-gradient(135deg, #28a745, #20c997);
-            box-shadow: 0 10px 30px rgba(40, 167, 69, 0.3);
-        }
-        
-        .score-circle.fail {
-            background: linear-gradient(135deg, #dc3545, #e74c3c);
-            box-shadow: 0 10px 30px rgba(220, 53, 69, 0.3);
-        }
-        
-        .flag-decoration {
-            text-align: center;
-            margin: 30px 0;
-            font-size: 2.5em;
-            animation: wave 2s ease-in-out infinite;
-        }
-        
-        @keyframes wave {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.1); }
-        }
-        
-        @media (max-width: 768px) {
-            body { 
-                padding: 10px;
-                font-size: 14px;
-            }
-            
-            .container {
-                margin: 0;
-                border-radius: 16px;
-            }
-            
-            .header {
-                padding: 25px 20px;
-            }
-            
-            .header h1 { 
-                font-size: 2em; 
-                line-height: 1.2;
-            }
-            
-            .header p {
-                font-size: 1em;
-            }
-            
-            .content { 
-                padding: 20px;
-            }
-            
-            .test-section {
-                padding: 25px 20px;
-                margin-bottom: 20px;
-            }
-            
-            .test-section h2 {
-                font-size: 1.8em;
-                line-height: 1.3;
-            }
-            
-            .question-card {
-                padding: 25px 20px;
-                margin: 20px 0;
-            }
-            
-            .question-text { 
-                font-size: 1.3em;
-                line-height: 1.5;
-                word-wrap: break-word;
-            }
-            
-            .answer-option {
-                padding: 18px 20px;
-                font-size: 1.1em;
-                line-height: 1.4;
-                word-wrap: break-word;
-                white-space: normal;
-                text-align: left;
-            }
-            
-            .answer-option span:last-child {
-                flex: 1;
-                min-width: 0;
-                word-break: break-word;
-            }
-            
-            .answer-letter {
-                width: 30px;
-                height: 30px;
-                font-size: 0.9em;
-                flex-shrink: 0;
-            }
-            
-            .btn {
-                padding: 15px 25px;
-                font-size: 1.1em;
-                margin: 8px 5px;
-                width: auto;
-                min-width: 120px;
-            }
-            
-            .home-cards { 
-                grid-template-columns: 1fr;
-                gap: 20px;
-            }
-            
-            .home-card {
-                padding: 30px 20px;
-            }
-            
-            .progress-container {
-                padding: 20px;
-                margin: 20px 0;
-            }
-            
-            .progress-text {
-                font-size: 1em;
-            }
-            
-            .feedback {
-                padding: 25px 20px;
-                font-size: 1.1em;
-            }
-            
-            .feedback-icon {
-                font-size: 1.8em;
-            }
-            
-            .final-score {
-                padding: 30px 20px;
-            }
-            
-            .score-circle {
-                width: 120px;
-                height: 120px;
-                font-size: 2em;
-            }
-            
-            .correct-answer {
-                padding: 15px;
-                font-size: 1em;
-                line-height: 1.4;
-                word-wrap: break-word;
-            }
-        }
-        
-        @media (max-width: 480px) {
-            .header h1 {
-                font-size: 1.8em;
-            }
-            
-            .question-text {
-                font-size: 1.2em;
-            }
-            
-            .answer-option {
-                padding: 15px 18px;
-                font-size: 1em;
-            }
-            
-            .btn {
-                padding: 12px 20px;
-                font-size: 1em;
-                margin: 5px 3px;
-            }
-            
-            .score-circle {
-                width: 100px;
-                height: 100px;
-                font-size: 1.8em;
-            }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
     </style>
 </head>
 <body>
-    <div class="stars">
-        <i class="fas fa-star star" style="top: 10%; left: 15%; animation-delay: 0s;"></i>
-        <i class="fas fa-star star" style="top: 20%; left: 80%; animation-delay: 0.5s;"></i>
-        <i class="fas fa-star star" style="top: 60%; left: 10%; animation-delay: 1s;"></i>
-        <i class="fas fa-star star" style="top: 80%; left: 75%; animation-delay: 1.5s;"></i>
-        <i class="fas fa-star star" style="top: 30%; left: 90%; animation-delay: 2s;"></i>
-    </div>
     <div class="container">
-        <div class="header">
-            <h1>🇺🇸 U.S. Naturalization Test</h1>
-            <p>Official Practice Test - USCIS Civics & English</p>
+        <div class="text-center mb-8">
+            <h1 class="text-4xl font-bold mb-2">StreamBeatz Code Restructurer</h1>
+            <p class="text-gray-400">Transform your single-file application into a structured, maintainable project.</p>
         </div>
-        
-        <div class="content">
-                <div class="container">
-        <div class="header">
-            <h1><i class="fas fa-flag-usa"></i> U.S. Naturalization Test</h1>
-            <p>Official Practice Test - USCIS Civics & English</p>
-        </div>
-        
-        <div class="content">
-            {% if page == 'home' %}
-            <div class="test-section">
-                <h2><i class="fas fa-home"></i> Welcome to Your Citizenship Journey</h2>
-                <div style="background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%); border: 2px solid #ffc107; color: #856404; padding: 25px; border-radius: 16px; margin-bottom: 30px;">
-                    <h3 style="margin-bottom: 15px; color: #b8860b;"><i class="fas fa-info-circle"></i> Test Requirements:</h3>
-                    <ul style="margin-left: 20px; margin-top: 10px; line-height: 1.8;">
-                        <li><strong>Civics Test:</strong> Answer 6 out of 10 questions correctly</li>
-                        <li><strong>English Reading:</strong> Read 1 out of 3 sentences correctly</li>
-                        <li><strong>English Writing:</strong> Write 1 out of 3 sentences correctly</li>
-                        <li><strong>Speaking:</strong> Demonstrated during the interview</li>
-                    </ul>
+
+        <div class="card p-8">
+            <form id="uploadForm" action="/restructure" method="post" enctype="multipart/form-data">
+                <div class="mb-6">
+                    <label for="project_name" class="block mb-2 text-sm font-medium text-gray-300">Project Name</label>
+                    <input type="text" id="project_name" name="project_name" value="streambeatz_project" required
+                           class="w-full bg-gray-900 border border-gray-600 text-white rounded-lg p-2.5 focus:ring-indigo-500 focus:border-indigo-500">
                 </div>
-                
-                <div class="flag-decoration">🗽⭐🦅⭐🗽</div>
-                
-                <div class="home-cards">
-                    <div class="home-card">
-                        <div class="home-card-icon">
-                            <i class="fas fa-landmark"></i>
-                        </div>
-                        <h3>Civics Test</h3>
-                        <p>Test your knowledge of U.S. history and government with official USCIS questions</p>
-                        <a href="/civics" class="btn">
-                            <i class="fas fa-play"></i> Start Civics Test
-                        </a>
-                    </div>
-                    
-                    <div class="home-card">
-                        <div class="home-card-icon">
-                            <i class="fas fa-book"></i>
-                        </div>
-                        <h3>English Test</h3>
-                        <p>Practice reading and writing with official vocabulary from the naturalization test</p>
-                        <a href="/english" class="btn btn-secondary">
-                            <i class="fas fa-language"></i> Start English Test
-                        </a>
-                    </div>
+                <div class="mb-6">
+                    <label class="file-label" for="file_upload">
+                        <span id="file-text">Click to upload your monolithic Python file</span>
+                        <input type="file" id="file_upload" name="file" class="hidden" accept=".py">
+                    </label>
                 </div>
-            </div>
-            {% endif %}
-            
-            {% if page == 'civics_question' %}
-            <div class="test-section">
-                <h2><i class="fas fa-landmark"></i> Civics Test</h2>
-                
-                <div class="progress-container">
-                    <div class="progress-header">
-                        <span class="progress-text">Question {{ current_question + 1 }} of 10</span>
-                        <span class="progress-text">Score: {{ score }}/{{ current_question }}</span>
-                    </div>
-                    <div class="progress-bar-container">
-                        <div class="progress-bar" style="width: {{ (current_question / 10) * 100 }}%"></div>
-                    </div>
-                </div>
-                
-                <div class="question-card">
-                    <div class="question-number">Question {{ current_question + 1 }}</div>
-                    <div class="question-text">{{ question.question }}</div>
-                    
-                    <form method="POST" id="answerForm">
-                        <div class="answers-grid">
-                            {% for i, answer in enumerate(question.answers) %}
-                            <label class="answer-option" onclick="submitAnswer('{{ answer }}')">
-                                <span class="answer-letter">{{ 'ABCDEFGHIJ'[i] }}</span>
-                                <span>{{ answer }}</span>
-                            </label>
-                            {% endfor %}
-                        </div>
-                        <input type="hidden" name="answer" id="selectedAnswer">
-                    </form>
-                </div>
-                
-                {% if feedback %}
-                <div class="feedback {{ 'correct' if feedback.correct else 'incorrect' }}">
-                    <span class="feedback-icon">{{ '🎉' if feedback.correct else '❌' }}</span>
-                    <div>{{ 'Correct!' if feedback.correct else 'Incorrect!' }}</div>
-                    {% if not feedback.correct %}
-                    <div class="correct-answer">
-                        <strong>Correct Answer:</strong> {{ feedback.correct_answer }}
-                    </div>
-                    {% endif %}
-                    
-                    <div style="margin-top: 25px;">
-                        {% if current_question < 9 %}
-                        <a href="/civics/{{ current_question + 1 }}" class="btn">
-                            <i class="fas fa-arrow-right"></i> Next Question
-                        </a>
-                        {% else %}
-                        <a href="/civics/results" class="btn">
-                            <i class="fas fa-flag-checkered"></i> View Results
-                        </a>
-                        {% endif %}
-                    </div>
-                </div>
-                {% endif %}
-                
-                <div style="text-align: center; margin-top: 30px;">
-                    <a href="/" class="btn btn-secondary">
-                        <i class="fas fa-home"></i> Back to Home
-                    </a>
-                </div>
-            </div>
-            {% endif %}
-            
-            {% if page == 'civics_results' %}
-            <div class="test-section">
-                <h2><i class="fas fa-trophy"></i> Civics Test Results</h2>
-                
-                <div class="final-score">
-                    <div class="score-circle {{ 'pass' if passed else 'fail' }}">
-                        {{ score }}/10
-                    </div>
-                    <h3 style="font-size: 2em; margin-bottom: 15px; color: {{ '#28a745' if passed else '#dc3545' }};">
-                        {{ 'PASSED! 🎉' if passed else 'FAILED 😔' }}
-                    </h3>
-                    <p style="font-size: 1.3em; color: #64748b;">
-                        {{ 'Congratulations! You answered enough questions correctly to pass the civics test.' if passed else 'You need to answer at least 6 questions correctly to pass. Keep studying and try again!' }}
-                    </p>
-                </div>
-                
-                <div style="background: white; padding: 30px; border-radius: 16px; margin: 30px 0; box-shadow: 0 8px 25px rgba(0,0,0,0.1);">
-                    <h3 style="color: #1e293b; margin-bottom: 25px; font-size: 1.5em;">
-                        <i class="fas fa-clipboard-list"></i> Detailed Review
-                    </h3>
-                    {% for i, result in enumerate(results) %}
-                    <div style="margin: 20px 0; padding: 20px; border-left: 4px solid {{ '#28a745' if result.correct else '#dc3545' }}; background: {{ '#f8f9fa' if result.correct else '#fff5f5' }}; border-radius: 8px;">
-                        <p style="font-weight: 600; margin-bottom: 10px;"><strong>Q{{ i + 1 }}:</strong> {{ result.question }}</p>
-                        <p style="margin-bottom: 8px;"><strong>Your Answer:</strong> {{ result.user_answer }}</p>
-                        <p style="margin-bottom: 8px;"><strong>Correct Answer:</strong> {{ result.correct_answer }}</p>
-                        <p style="color: {{ '#28a745' if result.correct else '#dc3545' }}; font-weight: bold;">
-                            {{ '✓ Correct' if result.correct else '✗ Incorrect' }}
-                        </p>
-                    </div>
-                    {% endfor %}
-                </div>
-                
-                <div style="text-align: center;">
-                    <a href="/civics" class="btn">
-                        <i class="fas fa-redo"></i> Take Test Again
-                    </a>
-                    <a href="/" class="btn btn-secondary">
-                        <i class="fas fa-home"></i> Back to Home
-                    </a>
-                </div>
-            </div>
-            {% endif %}
-            
-            {% if page == 'english' %}
-            <form method="POST">
-                <div class="test-section">
-                    <h2><i class="fas fa-book"></i> English Test</h2>
-                    
-                    <div class="question-card">
-                        <h3><i class="fas fa-eye"></i> Reading Test</h3>
-                        <div style="background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); border: 2px solid #2196f3; color: #0d47a1; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
-                            <p><strong>Instructions:</strong> Choose one sentence and read it aloud correctly. Select the sentence you can read best.</p>
-                        </div>
-                        {% for sentence in reading_sentences %}
-                        <label class="answer-option" style="margin-bottom: 10px;">
-                            <input type="radio" name="reading" value="{{ sentence }}" required style="margin-right: 15px;">
-                            <span style="font-size: 1.1em;">{{ sentence }}</span>
-                        </label>
-                        {% endfor %}
-                    </div>
-                    
-                    <div class="question-card">
-                        <h3><i class="fas fa-pencil-alt"></i> Writing Test</h3>
-                        <div style="background: linear-gradient(135deg, #e8f5e8 0%, #c8e6c9 100%); border: 2px solid #4caf50; color: #1b5e20; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
-                            <p><strong>Instructions:</strong> Choose one sentence and write it exactly in the text area below.</p>
-                        </div>
-                        {% for sentence in writing_sentences %}
-                        <label class="answer-option" style="margin-bottom: 10px;">
-                            <input type="radio" name="writing_choice" value="{{ sentence }}" required onclick="document.getElementById('writing_text').placeholder='Write: ' + this.value" style="margin-right: 15px;">
-                            <span style="font-size: 1.1em;">{{ sentence }}</span>
-                        </label>
-                        {% endfor %}
-                        <textarea id="writing_text" name="writing_text" style="width: 100%; height: 120px; padding: 15px; border: 2px solid #ddd; border-radius: 12px; font-size: 16px; font-family: 'Inter', sans-serif; margin-top: 20px; resize: vertical;" placeholder="Select a sentence above, then write it here exactly as shown..." required></textarea>
-                    </div>
-                    
-                    <div style="text-align: center; margin-top: 30px;">
-                        <button type="submit" class="btn">
-                            <i class="fas fa-check"></i> Submit English Test
-                        </button>
-                        <a href="/" class="btn btn-secondary">
-                            <i class="fas fa-home"></i> Back to Home
-                        </a>
-                    </div>
-                </div>
+                <button type="submit" class="btn w-full">
+                    <span id="button-text">Restructure Code</span>
+                    <div id="spinner" class="inline-block h-5 w-5 animate-spin rounded-full border-2 border-solid border-current border-r-transparent align-[-0.125em] motion-reduce:animate-[spin_1.5s_linear_infinite]"></div>
+                </button>
             </form>
-            {% endif %}
-            
-            {% if page == 'english_result' %}
-            <div class="test-section">
-                <h2><i class="fas fa-chart-line"></i> English Test Results</h2>
-                
-                <div class="feedback {{ 'correct' if reading_passed else 'incorrect' }}" style="margin-bottom: 25px;">
-                    <span class="feedback-icon">{{ '📖✓' if reading_passed else '📖✗' }}</span>
-                    <h3>Reading Test: {{ 'PASSED!' if reading_passed else 'FAILED' }}</h3>
-                    <p><strong>Selected Sentence:</strong> {{ reading_sentence }}</p>
-                    <p>{{ 'You successfully selected a sentence to read!' if reading_passed else 'Please practice reading the vocabulary.' }}</p>
-                </div>
-                
-                <div class="feedback {{ 'correct' if writing_passed else 'incorrect' }}" style="margin-bottom: 25px;">
-                    <span class="feedback-icon">{{ '✍️✓' if writing_passed else '✍️✗' }}</span>
-                    <h3>Writing Test: {{ 'PASSED!' if writing_passed else 'FAILED' }}</h3>
-                    <p><strong>Target Sentence:</strong> {{ writing_target }}</p>
-                    <p><strong>Your Writing:</strong> {{ writing_response }}</p>
-                    <p>{{ 'Perfect! You wrote the sentence correctly.' if writing_passed else 'The sentence does not match exactly. Please try again.' }}</p>
-                </div>
-                
-                <div class="final-score">
-                    <div class="score-circle {{ 'pass' if overall_passed else 'fail' }}">
-                        {{ 'PASS' if overall_passed else 'FAIL' }}
-                    </div>
-                    <h3 style="font-size: 2em; margin-bottom: 15px; color: {{ '#28a745' if overall_passed else '#dc3545' }};">
-                        Overall: {{ 'PASSED! 🎉' if overall_passed else 'FAILED 😔' }}
-                    </h3>
-                    <p style="font-size: 1.3em; color: #64748b;">
-                        {{ 'Congratulations! You passed both English components.' if overall_passed else 'You must pass both reading and writing to complete the English test.' }}
-                    </p>
-                </div>
-                
-                <div style="text-align: center;">
-                    <a href="/english" class="btn">
-                        <i class="fas fa-redo"></i> Take Test Again
-                    </a>
-                    <a href="/" class="btn btn-secondary">
-                        <i class="fas fa-home"></i> Back to Home
-                    </a>
-                </div>
-            </div>
-            {% endif %}
         </div>
+        <footer class="text-center mt-8 text-gray-500 text-sm">
+            <p>Your code is processed in memory and never stored on the server.</p>
+        </footer>
     </div>
-    
     <script>
-        function submitAnswer(answer) {
-            document.getElementById('selectedAnswer').value = answer;
-            document.getElementById('answerForm').submit();
-        }
+        const form = document.getElementById('uploadForm');
+        const fileInput = document.getElementById('file_upload');
+        const fileText = document.getElementById('file-text');
+        const spinner = document.getElementById('spinner');
+        const buttonText = document.getElementById('button-text');
+
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length > 0) {
+                fileText.textContent = `File selected: \${fileInput.files[0].name}`;
+            } else {
+                fileText.textContent = 'Click to upload your monolithic Python file';
+            }
+        });
+
+        form.addEventListener('submit', () => {
+            if (fileInput.files.length === 0) {
+                alert('Please select a file to upload.');
+                event.preventDefault();
+                return;
+            }
+            buttonText.textContent = 'Processing...';
+            spinner.style.display = 'inline-block';
+            form.querySelector('button').disabled = true;
+        });
     </script>
 </body>
 </html>
-'''
+"""
 
-@app.route('/')
-def home():
-    return render_template_string(HTML_TEMPLATE, page='home')
+# --- Code Analysis and Restructuring Logic ---
 
-@app.route('/civics')
-def start_civics_test():
-    # Reset test session
-    session['test_questions'] = random.sample(range(1, 101), 10)
-    session['current_question'] = 0
-    session['score'] = 0
-    session['answers'] = []
-    return redirect('/civics/0')
-
-@app.route('/civics/<int:question_num>', methods=['GET', 'POST'])
-def civics_question(question_num):
-    if 'test_questions' not in session:
-        return redirect('/civics')
-    
-    if question_num >= 10:
-        return redirect('/civics/results')
-    
-    question_id = session['test_questions'][question_num]
-    question_data = CIVICS_QUESTIONS[question_id]
-    
-    # Generate multiple choice options
-    multiple_choice_options = generate_multiple_choice(
-        question_id, 
-        question_data['correct'], 
-        question_data['answers']
-    )
-    
-    # Create question object with multiple choice options
-    question = {
-        'question': question_data['question'],
-        'answers': multiple_choice_options,
-        'correct': question_data['correct']
-    }
-    
-    feedback = None
-    
-    if request.method == 'POST':
-        user_answer = request.form.get('answer', '').strip()
-        correct_answer = question_data['correct']
-        
-        # Check if answer is correct (flexible matching)
-        is_correct = False
-        for possible_answer in question_data['answers']:
-            if (user_answer.lower().strip() in possible_answer.lower() or 
-                possible_answer.lower().strip() in user_answer.lower() or
-                user_answer.lower().strip() == possible_answer.lower().strip()):
-                is_correct = True
-                break
-        
-        if is_correct:
-            session['score'] = session.get('score', 0) + 1
-        
-        # Store the answer
-        session['answers'] = session.get('answers', [])
-        session['answers'].append({
-            'question': question_data['question'],
-            'user_answer': user_answer,
-            'correct_answer': correct_answer,
-            'correct': is_correct,
-            'question_id': question_id
-        })
-        session['current_question'] = question_num + 1
-        
-        feedback = {
-            'correct': is_correct,
-            'correct_answer': correct_answer
+class CodeCategorizer(ast.NodeVisitor):
+    def __init__(self):
+        self.categories = {
+            "imports": [], "config": [], "models": [], "schemas": [],
+            "dbsession": [], "services": [], "dependencies": [],
+            "routes": [], "main_app": [], "startup_events": [], "other": []
         }
-    
-    return render_template_string(HTML_TEMPLATE, 
-                                page='civics_question',
-                                question=question,
-                                current_question=question_num,
-                                score=session.get('score', 0),
-                                feedback=feedback)
+        self.fastapi_app_name = "app"
 
-@app.route('/civics/results')
-def civics_results():
-    if 'answers' not in session:
-        return redirect('/civics')
-    
-    score = session.get('score', 0)
-    passed = score >= 6
-    results = session.get('answers', [])
-    
-    return render_template_string(HTML_TEMPLATE,
-                                page='civics_results',
-                                score=score,
-                                passed=passed,
-                                results=results)
+    def visit_Import(self, node):
+        self.categories["imports"].append(node)
 
-@app.route('/english', methods=['GET', 'POST'])
-def english_test():
-    if request.method == 'GET':
-        # Select 3 random sentences for each component
-        reading_sentences = random.sample(READING_SENTENCES, 3)
-        writing_sentences = random.sample(WRITING_SENTENCES, 3)
-        
-        session['reading_sentences'] = reading_sentences
-        session['writing_sentences'] = writing_sentences
-        
-        return render_template_string(HTML_TEMPLATE, page='english', 
-                                    reading_sentences=reading_sentences,
-                                    writing_sentences=writing_sentences)
-    
-    else:
-        # Grade the test
-        reading_sentence = request.form.get('reading', '').strip()
-        writing_choice = request.form.get('writing_choice', '').strip()
-        writing_text = request.form.get('writing_text', '').strip()
-        
-        # Reading test: just need to select a sentence
-        reading_passed = reading_sentence in session.get('reading_sentences', [])
-        
-        # Writing test: must match exactly (case insensitive, but punctuation matters)
-        writing_passed = writing_choice.strip() == writing_text.strip()
-        
-        overall_passed = reading_passed and writing_passed
-        
-        return render_template_string(HTML_TEMPLATE, page='english_result',
-                                    reading_passed=reading_passed,
-                                    writing_passed=writing_passed,
-                                    overall_passed=overall_passed,
-                                    reading_sentence=reading_sentence,
-                                    writing_target=writing_choice,
-                                    writing_response=writing_text)
+    def visit_ImportFrom(self, node):
+        self.categories["imports"].append(node)
 
-if __name__ == '__main__':
-    app.run(debug=True)
+    def visit_Assign(self, node):
+        # This is a simplified check. A real-world scenario might be more complex.
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            name = node.targets[0].id
+            if name.isupper():
+                self.categories["config"].append(node)
+            elif name in ["engine", "AsyncSessionLocal", "Base", "redis_client", "pwd_context", "signer"]:
+                self.categories["dbsession"].append(node)
+            elif name == "app":
+                self.fastapi_app_name = name
+                self.categories["main_app"].append(node)
+            else:
+                self.categories["other"].append(node)
+        else:
+            self.categories["other"].append(node)
+
+    def visit_ClassDef(self, node):
+        # Check for base classes to categorize
+        if any(getattr(b, 'id', None) == 'Base' for b in node.bases):
+            self.categories["models"].append(node)
+        elif any(getattr(b, 'id', None) == 'BaseModel' for b in node.bases):
+            self.categories["schemas"].append(node)
+        else:
+            self.categories["other"].append(node)
+
+    def visit_FunctionDef(self, node):
+        is_route = False
+        is_startup = False
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Attribute):
+                if getattr(decorator.func.value, 'id', None) == self.fastapi_app_name:
+                    if decorator.func.attr in ['get', 'post', 'put', 'delete', 'websocket', 'exception_handler']:
+                        is_route = True
+                    elif decorator.func.attr == 'on_event' and decorator.args and isinstance(decorator.args[0], ast.Constant) and decorator.args[0].value == 'startup':
+                        is_startup = True
+
+        if is_route:
+            self.categories["routes"].append(node)
+        elif is_startup:
+            self.categories["startup_events"].append(node)
+        elif node.name in ['get_db', 'get_current_user', 'require_user', 'require_streamer', 'get_admin_user']:
+            self.categories["dependencies"].append(node)
+        elif node.name.startswith(('__', 'test_')):
+            self.categories["other"].append(node) # Ignore private/test functions for now
+        else:
+            self.categories["services"].append(node)
+
+def restructure_code(code: str, project_name: str):
+    """Main function to parse and restructure the code."""
+    tree = ast.parse(code)
+    categorizer = CodeCategorizer()
+    categorizer.visit(tree)
+    
+    # In-memory zip file
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        # Create directory structure
+        base_path = project_name
+        app_path = f"{base_path}/app"
+        dirs = [
+            app_path, f"{app_path}/api", f"{app_path}/core", f"{app_path}/db",
+            f"{app_path}/models", f"{app_path}/schemas", f"{app_path}/services",
+            f"{app_path}/dependencies", f"{base_path}/templates"
+        ]
+        for d in dirs:
+            zf.writestr(f"{d}/__init__.py", "")
+
+        # --- Create individual files ---
+
+        # 1. Config
+        config_code = "# --- Configuration variables ---\n\nimport os\n\n"
+        config_code += "\n".join([unparse(node) for node in categorizer.categories["config"]])
+        zf.writestr(f"{app_path}/core/config.py", config_code)
+
+        # 2. DB Session
+        db_session_code = dedent("""
+            import os
+            from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+            from sqlalchemy.orm import declarative_base
+            from .config import DATABASE_URL, REDIS_URL
+
+            if DATABASE_URL and DATABASE_URL.startswith('postgresql'):
+                engine = create_async_engine(DATABASE_URL, echo=False)
+                AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+            else:
+                engine = None
+                AsyncSessionLocal = None
+            
+            Base = declarative_base()
+
+            # Redis (optional)
+            redis_client = None
+            try:
+                import redis.asyncio as redis
+                if REDIS_URL:
+                    redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+            except ImportError:
+                pass
+        """)
+        zf.writestr(f"{app_path}/db/session.py", db_session_code)
+        
+        # 3. Models
+        model_imports = dedent("""
+            import uuid
+            from datetime import datetime
+            from sqlalchemy import (Column, String, Boolean, Integer, Float, DateTime, 
+                                    ForeignKey, Text, Index, UniqueConstraint, func)
+            from sqlalchemy.orm import relationship
+            from sqlalchemy.dialects.postgresql import UUID, JSONB
+            from app.db.session import Base
+        """)
+        for model_class in categorizer.categories["models"]:
+            filename = f"{model_class.name.lower()}.py"
+            file_content = model_imports + "\n\n" + unparse(model_class)
+            zf.writestr(f"{app_path}/models/{filename}", file_content)
+
+        # 4. Schemas
+        schema_imports = dedent("""
+            from typing import Optional, List, Dict, Any
+            from pydantic import BaseModel, validator, Field
+            from datetime import datetime
+            import re
+            from email_validator import validate_email, EmailNotValidError
+        """)
+        for schema_class in categorizer.categories["schemas"]:
+            filename = f"{schema_class.name.lower()}.py"
+            file_content = schema_imports + "\n\n" + unparse(schema_class)
+            zf.writestr(f"{app_path}/schemas/{filename}", file_content)
+
+        # 5. Services & Dependencies
+        zf.writestr(f"{app_path}/services.py", "# --- Business Logic and Helper Functions ---\n\n" +
+                    "import time\nimport secrets\nfrom datetime import datetime\nfrom passlib.context import CryptContext\n\n" +
+                    "\n\n".join([unparse(s) for s in categorizer.categories["services"]]))
+        
+        zf.writestr(f"{app_path}/dependencies.py", "# --- FastAPI Dependencies ---\n\n" +
+                    "from typing import Optional, Dict\nfrom fastapi import Depends, HTTPException, Request\nfrom sqlalchemy.ext.asyncio import AsyncSession\n\n"
+                    "from .db.session import AsyncSessionLocal\n\n" +
+                    "\n\n".join([unparse(d) for d in categorizer.categories["dependencies"]]))
+        
+        # 6. API Routers and HTML Templates
+        routes_by_prefix = {}
+        for route in categorizer.categories["routes"]:
+            # Extract URL path to group routes
+            path = route.decorator_list[0].args[0].value
+            prefix = "/" + path.split('/')[1]
+            if prefix not in routes_by_prefix:
+                routes_by_prefix[prefix] = []
+            
+            # Check for and extract HTML
+            if "HTMLResponse" in unparse(route):
+                # This is a complex task. We'll simplify by finding the f-string.
+                html_fstring_node = None
+                for node in ast.walk(route.body[-1]): # Assume return is the last statement
+                    if isinstance(node, ast.JoinedStr):
+                        html_fstring_node = node
+                        break
+                
+                if html_fstring_node:
+                    html_content = "".join([s.value for s in html_fstring_node.values if isinstance(s, ast.Constant)])
+                    # Create a sensible filename
+                    template_name = path.replace('/', '_').strip('_') + ".html"
+                    zf.writestr(f"{base_path}/templates/{template_name}", dedent(html_content))
+                    
+                    # Replace the return statement with a template render
+                    new_return = ast.Return(value=ast.Call(
+                        func=ast.Attribute(value=ast.Name(id="templates", ctx=ast.Load()), attr="TemplateResponse", ctx=ast.Load()),
+                        args=[ast.Constant(value=template_name), ast.Constant(value={"request": ast.Name(id="request", ctx=ast.Load())})], # Simplified context
+                        keywords=[]
+                    ))
+                    route.body[-1] = new_return
+
+            routes_by_prefix[prefix].append(route)
+        
+        # Write router files
+        router_files = []
+        for prefix, routes in routes_by_prefix.items():
+            router_name = prefix.replace('/', '') or 'root'
+            router_filename = f"{router_name}.py"
+            router_files.append(router_name)
+            
+            router_code = "from fastapi import APIRouter, Depends, Request, Response\n"
+            router_code += "from fastapi.responses import HTMLResponse, RedirectResponse\n"
+            router_code += "from sqlalchemy.ext.asyncio import AsyncSession\n"
+            router_code += "from app.dependencies import get_db, require_user, require_streamer\n\n"
+            router_code += "router = APIRouter()\n\n"
+            
+            for route in routes:
+                # Change decorator from app.get to router.get
+                decorator_func = route.decorator_list[0].func
+                decorator_func.value.id = "router"
+                router_code += unparse(route) + "\n\n"
+            zf.writestr(f"{app_path}/api/{router_filename}", router_code)
+
+        # 7. Main app file
+        main_py_code = dedent(f"""
+            from fastapi import FastAPI
+            from fastapi.middleware.cors import CORSMiddleware
+            from fastapi.templating import Jinja2Templates
+            from app.core.config import BASE_URL
+        """)
+        for router_name in router_files:
+            main_py_code += f"from app.api import {router_name}\n"
+        
+        main_py_code += dedent(f"""
+
+            app = FastAPI(
+                title="{project_name}",
+                version="1.0.0"
+            )
+
+            templates = Jinja2Templates(directory="templates")
+
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=["*"],
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
+
+            # Include API routers
+        """)
+        for router_name in router_files:
+            main_py_code += f"app.include_router({router_name}.router, tags=[\"{router_name}\"])\n"
+
+        zf.writestr(f"{app_path}/main.py", main_py_code)
+
+        # 8. Requirements.txt
+        # Simplified based on the provided script
+        requirements = [
+            "fastapi", "uvicorn[standard]", "SQLAlchemy", "asyncpg",
+            "pydantic", "httpx", "stripe", "qrcode", "itsdangerous",
+            "passlib[bcrypt]", "email_validator", "redis", "python-multipart", "Jinja2"
+        ]
+        zf.writestr(f"{base_path}/requirements.txt", "\n".join(requirements))
+        
+        # 9. .gitignore
+        gitignore = dedent("""
+            # Byte-compiled / optimized / DLL files
+            __pycache__/
+            *.py[cod]
+            *$py.class
+
+            # Environment
+            .env
+            venv/
+            
+            # IDEs
+            .vscode/
+            .idea/
+        """)
+        zf.writestr(f"{base_path}/.gitignore", gitignore)
+
+    zip_buffer.seek(0)
+    return zip_buffer
+
+
+# --- FastAPI Endpoints ---
+
+@app.get("/", response_class=HTMLResponse)
+async def home():
+    """Serves the main HTML upload page."""
+    return HOME_PAGE_HTML
+
+@app.post("/restructure")
+async def restructure_endpoint(project_name: str = Form(...), file: UploadFile = File(...)):
+    """Handles file upload, restructuring, and returns a zip file."""
+    if not file.filename.endswith(".py"):
+        return HTMLResponse(content="<h1>Error: Please upload a Python (.py) file.</h1>", status_code=400)
+
+    contents = await file.read()
+    code_string = contents.decode("utf-8")
+
+    try:
+        zip_buffer = restructure_code(code_string, project_name)
+    except Exception as e:
+        # Provide a more helpful error message
+        error_html = f"""
+        <h1>Restructuring Failed</h1>
+        <p>An error occurred while processing your file:</p>
+        <pre style='background: #222; padding: 1rem; border-radius: 5px; color: #ff5555;'>{e}</pre>
+        <p>This can happen if the script has complex syntax that the parser cannot automatically handle. Please check the file and try again.</p>
+        """
+        return HTMLResponse(content=error_html, status_code=500)
+
+    return StreamingResponse(
+        iter([zip_buffer.read()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={project_name}.zip"}
+    )
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
