@@ -1,14 +1,40 @@
+"""
+FastAPI Monolith Refactoring Tool
+
+This web application automatically refactors large, monolithic FastAPI applications
+into well-structured, modular projects. It uses AST (Abstract Syntax Tree) parsing
+to intelligently analyze and reorganize code.
+
+Features:
+- Automatic detection of models, schemas, routes, and utilities
+- Intelligent grouping of routes by domain
+- Configuration extraction and centralization
+- Proper import management
+- HTML template extraction preparation
+- Complete project structure generation
+
+Requirements:
+- Python 3.8+ (Python 3.9+ recommended for better AST support)
+- FastAPI
+- Uvicorn
+
+Deploy this on Render.com for easy access via web interface.
+"""
+
 import os
 import ast
 import re
+import json
 import shutil
 import zipfile
 import tempfile
 import logging
+import asyncio
 import time
 import sys
 from pathlib import Path
 from typing import Dict, List, Set, Tuple, Optional
+from dataclasses import dataclass, field
 from collections import defaultdict
 
 from fastapi import FastAPI, File, UploadFile, Request
@@ -16,12 +42,12 @@ from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
+# Check if ast.unparse is available (Python 3.9+)
+HAS_AST_UNPARSE = hasattr(ast, 'unparse')
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-# Helper to unparse AST nodes back to code, which is standard in Python 3.9+
-unparse = ast.unparse
 
 app = FastAPI(title="FastAPI Monolith Refactoring Engine")
 
@@ -36,64 +62,270 @@ HTML_TEMPLATE = """
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
         * { font-family: 'Inter', sans-serif; }
-        .gradient-bg { background: linear-gradient(135deg, #1e3a8a 0%, #4c1d95 100%); }
-        .glass { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
-        .upload-zone { border: 3px dashed rgba(255, 255, 255, 0.3); transition: all 0.3s ease; }
-        .upload-zone:hover { border-color: rgba(255, 255, 255, 0.6); background: rgba(255, 255, 255, 0.05); }
-        .upload-zone.dragover { border-color: #34d399; background: rgba(16, 185, 129, 0.1); }
-        .progress-bar { transition: width 0.5s ease-out; }
-        .feature-card { transition: transform 0.2s ease; }
-        .feature-card:hover { transform: translateY(-4px); }
-        pre { white-space: pre-wrap; word-wrap: break-word; }
+        
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .glass {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .upload-zone {
+            border: 3px dashed rgba(255, 255, 255, 0.3);
+            transition: all 0.3s ease;
+        }
+        
+        .upload-zone:hover {
+            border-color: rgba(255, 255, 255, 0.6);
+            background: rgba(255, 255, 255, 0.05);
+        }
+        
+        .upload-zone.dragover {
+            border-color: #10b981;
+            background: rgba(16, 185, 129, 0.1);
+        }
+        
+        .progress-bar {
+            transition: width 0.5s ease-out;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        
+        .feature-card {
+            transition: transform 0.2s ease;
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-4px);
+        }
     </style>
 </head>
-<body class="gradient-bg min-h-screen text-gray-200">
+<body class="gradient-bg min-h-screen text-white">
     <div class="container mx-auto px-4 py-8 max-w-6xl">
+        <!-- Header -->
         <div class="text-center mb-12">
-            <h1 class="text-5xl font-bold text-white mb-4">FastAPI Refactoring Engine</h1>
-            <p class="text-xl text-gray-300">Transform your monolithic FastAPI application into a clean, modular architecture</p>
+            <h1 class="text-5xl font-bold mb-4">FastAPI Refactoring Engine</h1>
+            <p class="text-xl opacity-90">Transform your monolithic FastAPI application into a clean, modular architecture</p>
         </div>
+        
+        <!-- Features Grid -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
-            <div class="glass rounded-xl p-6 feature-card text-center"><div class="text-4xl mb-3">🏗️</div><h3 class="text-lg font-semibold text-white">Smart Structure</h3><p class="text-sm text-gray-400">Organizes code into logical modules: api, core, models, schemas.</p></div>
-            <div class="glass rounded-xl p-6 feature-card text-center"><div class="text-4xl mb-3">🔍</div><h3 class="text-lg font-semibold text-white">AST Analysis</h3><p class="text-sm text-gray-400">Uses Abstract Syntax Tree parsing for accurate code understanding.</p></div>
-            <div class="glass rounded-xl p-6 feature-card text-center"><div class="text-4xl mb-3">📦</div><h3 class="text-lg font-semibold text-white">Ready to Deploy</h3><p class="text-sm text-gray-400">Generates a runnable project with proper imports and dependencies.</p></div>
+            <div class="glass rounded-xl p-6 feature-card">
+                <div class="text-3xl mb-3">🏗️</div>
+                <h3 class="text-lg font-semibold mb-2">Smart Structure</h3>
+                <p class="text-sm opacity-80">Intelligently organizes code into logical modules and packages</p>
+            </div>
+            <div class="glass rounded-xl p-6 feature-card">
+                <div class="text-3xl mb-3">🔍</div>
+                <h3 class="text-lg font-semibold mb-2">AST Analysis</h3>
+                <p class="text-sm opacity-80">Uses Abstract Syntax Tree parsing for accurate code understanding</p>
+            </div>
+            <div class="glass rounded-xl p-6 feature-card">
+                <div class="text-3xl mb-3">📦</div>
+                <h3 class="text-lg font-semibold mb-2">Ready to Deploy</h3>
+                <p class="text-sm opacity-80">Generates complete project with proper imports and dependencies</p>
+            </div>
         </div>
+        
+        <!-- Upload Section -->
         <div class="glass rounded-2xl p-8">
             <form id="uploadForm" enctype="multipart/form-data">
                 <div class="upload-zone rounded-xl p-12 text-center cursor-pointer" id="dropZone">
-                    <svg class="w-16 h-16 mx-auto mb-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
-                    <p class="text-xl font-medium text-white mb-2" id="uploadText">Drop your FastAPI file here or click to browse</p>
-                    <p class="text-sm text-gray-400">Supports .py files up to 50MB</p>
+                    <svg class="w-16 h-16 mx-auto mb-4 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                    </svg>
+                    <p class="text-xl font-medium mb-2" id="uploadText">Drop your FastAPI file here or click to browse</p>
+                    <p class="text-sm opacity-60">Supports .py files up to 50MB</p>
                     <input type="file" id="fileInput" class="hidden" accept=".py">
                 </div>
-                <div id="fileInfo" class="mt-6 hidden"><div class="flex items-center justify-between p-4 bg-gray-900/50 rounded-lg"><div class="flex items-center"><svg class="w-8 h-8 mr-3 text-green-400" fill="currentColor" viewBox="0 0 20 20"><path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"></path><path fill-rule="evenodd" d="M4 5a2 2 0 012-2 1 1 0 000 2H6a2 2 0 00-2 2v6a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-1a1 1 0 100-2h1a4 4 0 014 4v6a4 4 0 01-4 4H6a4 4 0 01-4-4V7a4 4 0 014-4z" clip-rule="evenodd"></path></svg><div><p class="font-medium text-white" id="fileName">file.py</p><p class="text-sm text-gray-400" id="fileSize">0 KB</p></div></div><button type="button" class="text-red-400 hover:text-red-300" onclick="resetUpload()">×</button></div></div>
-                <button type="submit" id="refactorBtn" class="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 py-4 rounded-lg font-medium text-lg text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed" disabled><span id="btnText">Select a file to begin</span><svg id="btnSpinner" class="hidden inline-block w-5 h-5 ml-2 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg></button>
+                
+                <!-- Progress Section -->
+                <div id="progressSection" class="mt-6 hidden">
+                    <div class="flex justify-between text-sm mb-2">
+                        <span id="progressText">Processing...</span>
+                        <span id="progressPercent">0%</span>
+                    </div>
+                    <div class="w-full bg-white/20 rounded-full h-2">
+                        <div class="progress-bar bg-green-400 h-2 rounded-full" style="width: 0%"></div>
+                    </div>
+                </div>
+                
+                <!-- File Info -->
+                <div id="fileInfo" class="mt-6 hidden">
+                    <div class="flex items-center justify-between p-4 bg-white/10 rounded-lg">
+                        <div class="flex items-center">
+                            <svg class="w-8 h-8 mr-3 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z"></path>
+                                <path fill-rule="evenodd" d="M4 5a2 2 0 012-2 1 1 0 000 2H6a2 2 0 00-2 2v6a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-1a1 1 0 100-2h1a4 4 0 014 4v6a4 4 0 01-4 4H6a4 4 0 01-4-4V7a4 4 0 014-4z" clip-rule="evenodd"></path>
+                            </svg>
+                            <div>
+                                <p class="font-medium" id="fileName">file.py</p>
+                                <p class="text-sm opacity-60" id="fileSize">0 KB</p>
+                            </div>
+                        </div>
+                        <button type="button" class="text-red-400 hover:text-red-300" onclick="resetUpload()">
+                            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Refactor Button -->
+                <button type="submit" id="refactorBtn" class="w-full mt-6 bg-white/20 hover:bg-white/30 py-4 rounded-lg font-medium text-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                    <span id="btnText">Select a file to begin refactoring</span>
+                    <svg id="btnSpinner" class="hidden inline-block w-5 h-5 ml-2 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                </button>
             </form>
         </div>
-        <div id="resultsSection" class="mt-12 hidden"><div class="glass rounded-2xl p-8"><h2 class="text-3xl font-bold mb-6 text-white">Refactoring Complete! 🎉</h2><div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6"><div class="bg-gray-900/50 rounded-lg p-4"><p class="text-sm text-gray-400 mb-1">Original Lines</p><p class="text-3xl font-semibold text-white" id="originalLines">0</p></div><div class="bg-gray-900/50 rounded-lg p-4"><p class="text-sm text-gray-400 mb-1">Files Created</p><p class="text-3xl font-semibold text-white" id="filesCreated">0</p></div></div><h3 class="text-xl font-semibold mb-4 text-white">Generated Project Structure:</h3><div id="structurePreview" class="bg-black/50 rounded-lg p-4 mb-6 font-mono text-sm overflow-x-auto"></div><a id="downloadBtn" href="#" class="inline-block w-full text-center bg-green-500 hover:bg-green-600 px-6 py-3 rounded-lg font-medium text-white transition-colors">Download Refactored Project (.zip)</a></div></div>
+        
+        <!-- Results Section -->
+        <div id="resultsSection" class="mt-12 hidden">
+            <div class="glass rounded-2xl p-8">
+                <h2 class="text-2xl font-bold mb-6">Refactoring Complete! 🎉</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                    <div class="bg-white/10 rounded-lg p-4">
+                        <p class="text-sm opacity-60 mb-1">Original Lines</p>
+                        <p class="text-2xl font-semibold" id="originalLines">0</p>
+                    </div>
+                    <div class="bg-white/10 rounded-lg p-4">
+                        <p class="text-sm opacity-60 mb-1">Files Created</p>
+                        <p class="text-2xl font-semibold" id="filesCreated">0</p>
+                    </div>
+                </div>
+                <div id="structurePreview" class="bg-black/30 rounded-lg p-4 mb-6 font-mono text-sm overflow-x-auto">
+                    <!-- File structure will be shown here -->
+                </div>
+                <a id="downloadBtn" href="#" class="inline-block bg-green-500 hover:bg-green-600 px-6 py-3 rounded-lg font-medium transition-colors">
+                    Download Refactored Project
+                </a>
+            </div>
+        </div>
     </div>
+    
     <script>
-        const dropZone = document.getElementById('dropZone'), fileInput = document.getElementById('fileInput'), uploadForm = document.getElementById('uploadForm'), fileInfo = document.getElementById('fileInfo'), refactorBtn = document.getElementById('refactorBtn'), resultsSection = document.getElementById('resultsSection');
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const uploadForm = document.getElementById('uploadForm');
+        const progressSection = document.getElementById('progressSection');
+        const fileInfo = document.getElementById('fileInfo');
+        const refactorBtn = document.getElementById('refactorBtn');
+        const resultsSection = document.getElementById('resultsSection');
         let selectedFile = null;
+        
+        // Drag and drop
         dropZone.addEventListener('click', () => fileInput.click());
-        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
-        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-        dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); if (e.dataTransfer.files.length > 0 && e.dataTransfer.files[0].name.endsWith('.py')) handleFile(e.dataTransfer.files[0]); });
-        fileInput.addEventListener('change', (e) => { if (e.target.files.length > 0) handleFile(e.target.files[0]); });
-        function handleFile(file) { selectedFile = file; document.getElementById('fileName').textContent = file.name; document.getElementById('fileSize').textContent = (file.size / 1024).toFixed(1) + ' KB'; fileInfo.classList.remove('hidden'); refactorBtn.disabled = false; document.getElementById('btnText').textContent = 'Start Refactoring'; dropZone.style.display = 'none'; }
-        function resetUpload() { selectedFile = null; fileInput.value = ''; fileInfo.classList.add('hidden'); refactorBtn.disabled = true; document.getElementById('btnText').textContent = 'Select a file to begin'; dropZone.style.display = 'block'; resultsSection.classList.add('hidden'); }
-        uploadForm.addEventListener('submit', async (e) => {
-            e.preventDefault(); if (!selectedFile) return;
-            const formData = new FormData(); formData.append('file', selectedFile);
-            refactorBtn.disabled = true; document.getElementById('btnText').textContent = 'Analyzing Code...'; document.getElementById('btnSpinner').classList.remove('hidden');
-            try {
-                const response = await fetch('/refactor', { method: 'POST', body: formData });
-                document.getElementById('btnText').textContent = 'Generating Files...';
-                if (response.ok) { const result = await response.json(); showResults(result); } 
-                else { const err = await response.json(); throw new Error(err.detail || 'Refactoring failed on the server.'); }
-            } catch (error) { alert('Error: ' + error.message); resetUpload(); }
+        
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
         });
+        
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+        
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0 && files[0].name.endsWith('.py')) {
+                handleFile(files[0]);
+            }
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+        
+        function handleFile(file) {
+            selectedFile = file;
+            document.getElementById('fileName').textContent = file.name;
+            document.getElementById('fileSize').textContent = formatFileSize(file.size);
+            document.getElementById('fileInfo').classList.remove('hidden');
+            refactorBtn.disabled = false;
+            document.getElementById('btnText').textContent = 'Start Refactoring';
+            dropZone.style.display = 'none';
+        }
+        
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+        
+        function resetUpload() {
+            selectedFile = null;
+            fileInput.value = '';
+            document.getElementById('fileInfo').classList.add('hidden');
+            refactorBtn.disabled = true;
+            document.getElementById('btnText').textContent = 'Select a file to begin refactoring';
+            dropZone.style.display = 'block';
+            progressSection.classList.add('hidden');
+            resultsSection.classList.add('hidden');
+        }
+        
+        uploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!selectedFile) return;
+            
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+            
+            // Show progress
+            progressSection.classList.remove('hidden');
+            refactorBtn.disabled = true;
+            document.getElementById('btnText').textContent = 'Refactoring...';
+            document.getElementById('btnSpinner').classList.remove('hidden');
+            
+            // Simulate progress
+            let progress = 0;
+            const progressBar = document.querySelector('.progress-bar');
+            const progressInterval = setInterval(() => {
+                progress += Math.random() * 15;
+                if (progress > 90) progress = 90;
+                progressBar.style.width = progress + '%';
+                document.getElementById('progressPercent').textContent = Math.round(progress) + '%';
+            }, 500);
+            
+            try {
+                const response = await fetch('/refactor', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                clearInterval(progressInterval);
+                progressBar.style.width = '100%';
+                document.getElementById('progressPercent').textContent = '100%';
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    showResults(result);
+                } else {
+                    throw new Error('Refactoring failed');
+                }
+            } catch (error) {
+                clearInterval(progressInterval);
+                alert('Error: ' + error.message);
+                resetUpload();
+            }
+        });
+        
         function showResults(result) {
             document.getElementById('originalLines').textContent = result.original_lines.toLocaleString();
             document.getElementById('filesCreated').textContent = result.files_created;
@@ -108,257 +340,799 @@ HTML_TEMPLATE = """
 </html>
 """
 
-class CodeRefactorer:
-    def __init__(self, source_code: str, project_name: str):
+# Data classes for code organization
+@dataclass
+class CodeBlock:
+    """Represents a code block to be extracted."""
+    content: str
+    line_start: int
+    line_end: int
+    type: str  # 'class', 'function', 'route', etc.
+    name: str
+    decorators: List[str] = field(default_factory=list)
+    imports_needed: Set[str] = field(default_factory=set)
+
+@dataclass
+class RouteInfo:
+    """Information about a route endpoint."""
+    method: str
+    path: str
+    function_name: str
+    has_html_response: bool
+    html_content: Optional[str] = None
+    template_variables: List[str] = field(default_factory=list)
+
+
+class AdvancedCodeRefactorer:
+    """Advanced refactoring engine using AST parsing."""
+    
+    def __init__(self, source_code: str):
         self.source_code = source_code
-        self.project_name = project_name
-        self.tree = ast.parse(source_code)
-        self.app_name = self._find_app_name()
-        self.local_modules = self._detect_local_modules()
+        self.lines = source_code.split('\n')
+        self.tree = None
+        self.imports = []
+        self.code_blocks = defaultdict(list)
+        self.routes = []
+        self.models = []
+        self.schemas = []
+        self.utilities = []
+        self.config_vars = []
+    
+    def _safe_unparse(self, node, fallback_start=None, fallback_end=None):
+        """Safely unparse an AST node with fallback to raw content."""
+        if HAS_AST_UNPARSE:
+            try:
+                return ast.unparse(node)
+            except:
+                pass
         
-        self.nodes = defaultdict(list)
-        self.routes = defaultdict(list)
-        self.html_templates: Dict[str, str] = {}
-
-    def _find_app_name(self) -> str:
-        for node in ast.walk(self.tree):
-            if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) and
-                    getattr(node.value.func, 'id', '') == 'FastAPI'):
-                return node.targets[0].id
-        return "app"
-
-    def _detect_local_modules(self) -> Set[str]:
-        known_packages = set(sys.stdlib_module_names) | {
-            "fastapi", "uvicorn", "sqlalchemy", "pydantic", "httpx", "stripe",
-            "qrcode", "itsdangerous", "passlib", "email_validator", "redis", "boto3",
-            "starlette", "jinja2"
-        }
-        local_mods = set()
+        # Fallback to raw content extraction
+        if fallback_start is not None and fallback_end is not None:
+            return '\n'.join(self.lines[fallback_start-1:fallback_end])
+        elif hasattr(node, 'lineno') and hasattr(node, 'end_lineno'):
+            return '\n'.join(self.lines[node.lineno-1:node.end_lineno])
+        else:
+            return str(node)
+        
+    def parse(self):
+        """Parse the source code using AST."""
+        try:
+            self.tree = ast.parse(self.source_code)
+            self._extract_imports()
+            self._categorize_code()
+        except SyntaxError as e:
+            logger.error(f"Syntax error in source code: {e}")
+            raise ValueError(f"Syntax error at line {e.lineno}: {e.msg}")
+        except Exception as e:
+            logger.error(f"Parsing error: {e}")
+            raise ValueError(f"Failed to parse code: {str(e)}")
+    
+    def _extract_imports(self):
+        """Extract all import statements."""
         for node in ast.walk(self.tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    if '.' not in alias.name and alias.name not in known_packages:
-                        local_mods.add(alias.name)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                if '.' not in node.module and node.module not in known_packages:
-                    local_mods.add(node.module)
-        return local_mods
-
-    def refactor(self) -> str:
-        self._categorize_nodes()
-        return self._create_zip_file()
-
-    def _categorize_nodes(self):
+                    import_stmt = f"import {alias.name}"
+                    if alias.asname:
+                        import_stmt += f" as {alias.asname}"
+                    self.imports.append(import_stmt)
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ''
+                if node.names[0].name == '*':
+                    self.imports.append(f"from {module} import *")
+                else:
+                    for alias in node.names:
+                        import_stmt = f"from {module} import {alias.name}"
+                        if alias.asname:
+                            import_stmt += f" as {alias.asname}"
+                        self.imports.append(import_stmt)
+    
+    def _categorize_code(self):
+        """Categorize code into different types."""
         for node in self.tree.body:
-            if isinstance(node, (ast.Import, ast.ImportFrom)): continue
-            
-            if isinstance(node, ast.Assign):
-                name = node.targets[0].id if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) else None
-                if name and name.isupper(): self.nodes['config'].append(node)
-                elif name == self.app_name: self.nodes['main_app'].append(node)
-                elif name in ["engine", "AsyncSessionLocal", "Base", "redis_client"]: self.nodes['db_setup'].append(node)
-                else: self.nodes['globals'].append(node)
-            elif isinstance(node, ast.ClassDef):
-                bases = {getattr(b, 'id', None) for b in node.bases}
-                if 'Base' in bases: self.nodes['models'].append(node)
-                elif 'BaseModel' in bases: self.nodes['schemas'].append(node)
-                else: self.nodes['globals'].append(node)
+            if isinstance(node, ast.ClassDef):
+                self._process_class(node)
             elif isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
-                is_route, is_startup = False, False
-                for d in node.decorator_list:
-                    if isinstance(d, ast.Call) and getattr(d.func, 'value', {}).id == self.app_name:
-                        attr = getattr(d.func, 'attr', '')
-                        if attr in {'get', 'post', 'put', 'delete', 'websocket'}: is_route = True
-                        elif attr == 'on_event' and d.args[0].value == 'startup': is_startup = True
-                
-                if is_startup: self.nodes['startup'].append(node)
-                elif is_route: self._process_route(node)
-                elif node.name.startswith(('get_', 'require_', 'check_')): self.nodes['dependencies'].append(node)
-                else: self.nodes['services'].append(node)
-            else:
-                self.nodes['globals'].append(node)
-
-    def _process_route(self, node):
-        path_arg = node.decorator_list[0].args[0]
-        path = path_arg.value if isinstance(path_arg, ast.Constant) else "/unknown"
-        prefix = path.split('/')[1] if path.count('/') > 0 and path != "/" else "root"
+                self._process_function(node)
+            elif isinstance(node, ast.Assign):
+                self._process_assignment(node)
+    
+    def _process_class(self, node: ast.ClassDef):
+        """Process class definitions."""
+        content = self._safe_unparse(node)
         
-        # Rewrite decorator from @app.get to @router.get
-        node.decorator_list[0].func.value.id = 'router'
-
-        # Check for and extract HTML
-        if 'HTMLResponse' in unparse(node):
-            html_fstring = next((n for n in ast.walk(node) if isinstance(n, ast.JoinedStr)), None)
-            if html_fstring:
-                html_content = "".join([s.value for s in html_fstring.values if isinstance(s, ast.Constant)])
-                template_name = f"{prefix}_{node.name}.html"
-                self.html_templates[template_name] = dedent(html_content)
-                # Replace return statement
-                new_return = ast.Return(value=ast.Call(
-                    func=ast.Name(id="templates.TemplateResponse", ctx=ast.Load()),
-                    args=[ast.Constant(value=template_name), ast.Dict(keys=[ast.Constant(value="request")], values=[ast.Name(id="request", ctx=ast.Load())])],
-                    keywords=[]
-                ))
-                node.body[-1] = new_return
+        # Check if it's a SQLAlchemy model
+        is_model = False
+        is_schema = False
         
-        self.routes[prefix].append(node)
-
-    def _create_zip_file(self):
-        temp_dir = tempfile.mkdtemp()
-        project_root = Path(temp_dir) / self.project_name
+        for base in node.bases:
+            if isinstance(base, ast.Name):
+                if base.id == 'Base':
+                    is_model = True
+                    break
+                elif base.id == 'BaseModel':
+                    is_schema = True
+                    break
         
-        # Create directories
-        app_dir = project_root / "app"
-        api_dir = app_dir / "api"
-        dirs = [project_root, app_dir, api_dir, app_dir / "core", app_dir / "db", 
-                app_dir / "models", app_dir / "schemas", app_dir / "services", 
-                app_dir / "dependencies", project_root / "templates"]
-        for d in dirs: d.mkdir(parents=True, exist_ok=True)
-        for d in dirs: (d / "__init__.py").touch() if d != project_root else None
-
-        # Write files
-        (app_dir / "core" / "config.py").write_text("import os\n\n" + "\n".join(unparse(n) for n in self.nodes['config']))
-        (app_dir / "db" / "base.py").write_text("from sqlalchemy.orm import declarative_base\n\nBase = declarative_base()\n")
-        (app_dir / "db" / "session.py").write_text(dedent("""
-            from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-            from app.core.config import DATABASE_URL
-            engine = create_async_engine(DATABASE_URL, pool_pre_ping=True)
-            AsyncSessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=engine)
-        """))
-        for model in self.nodes['models']: (app_dir / "models" / f"{model.name.lower()}.py").write_text(dedent("""
-            import uuid; from datetime import datetime
-            from sqlalchemy import Column, String, Boolean, Integer, Float, DateTime, ForeignKey, Text, func
-            from sqlalchemy.orm import relationship
-            from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
-            from app.db.base import Base
-            """) + f"\n\n{unparse(model)}")
-        for schema in self.nodes['schemas']: (app_dir / "schemas" / f"{schema.name.lower()}.py").write_text(dedent("""
-            from pydantic import BaseModel, validator, Field
-            from typing import Optional, List, Dict, Any
-            from datetime import datetime
-            import re
-            try: from email_validator import validate_email, EmailNotValidError
-            except ImportError: EmailNotValidError = ValueError
-            """) + f"\n\n{unparse(schema)}")
-        (app_dir / "services" / "utils.py").write_text(dedent("""
-            import os, time, secrets, hmac, hashlib
-            from passlib.context import CryptContext
-            from itsdangerous import URLSafeTimedSerializer
-            from app.core.config import SESSION_SECRET
-            """) + "\n\n" + "\n\n".join(unparse(n) for n in self.nodes['globals'] + self.nodes['services']))
-        (app_dir / "dependencies" / "deps.py").write_text(dedent("""
-            from fastapi import Depends, HTTPException, Request
-            from sqlalchemy.ext.asyncio import AsyncSession
-            from app.db.session import AsyncSessionLocal
-            async def get_db():
-                async with AsyncSessionLocal() as session: yield session
-            """) + "\n\n" + "\n\n".join(unparse(n) for n in self.nodes['dependencies']))
-        
-        router_names = []
-        for prefix, routes in self.routes.items():
-            router_name = prefix.replace('/', '')
-            router_names.append(router_name)
-            imports = dedent("""
-                import os, uuid, time, json, asyncio, hashlib
-                from datetime import datetime, timedelta
-                from typing import Optional, List, Dict, Any
-                from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, Form, Query, BackgroundTasks, File, UploadFile
-                from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse, JSONResponse
-                from sqlalchemy.ext.asyncio import AsyncSession
-                from app.dependencies.deps import get_db, get_current_user, require_user, require_streamer
-                # TODO: Add specific model, schema, and service imports
-            """)
-            router_code = f"{imports}\nrouter = APIRouter(tags=['{router_name}'])" + "\n\n" + "\n\n".join(unparse(r) for r in routes)
-            (api_dir / f"{router_name}.py").write_text(router_code)
-            
-        for name, html in self.html_templates.items(): (project_root / "templates" / name).write_text(html)
-        
-        # Main file
-        main_imports = "\n".join(f"from app.api import {name} as {name}_router" for name in router_names)
-        router_includes = "\n".join(f"app.include_router({name}_router.router)" for name in router_names)
-        (app_dir / "main.py").write_text(dedent(f"""
-            from fastapi import FastAPI
-            from fastapi.middleware.cors import CORSMiddleware
-            from fastapi.templating import Jinja2Templates
-            {main_imports}
-            
-            app = FastAPI(title="{self.project_name.replace('_', ' ').title()}")
-            templates = Jinja2Templates(directory="../templates")
-            app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
-            
-            {router_includes}
-            
-            @app.on_event("startup")
-            async def startup():
-                # Add your startup logic here
+        if is_model:
+            self.models.append(CodeBlock(
+                content=content,
+                line_start=node.lineno,
+                line_end=node.end_lineno,
+                type='model',
+                name=node.name
+            ))
+        elif is_schema:
+            self.schemas.append(CodeBlock(
+                content=content,
+                line_start=node.lineno,
+                line_end=node.end_lineno,
+                type='schema',
+                name=node.name
+            ))
+        else:
+            # Other classes go to utilities
+            self.utilities.append(CodeBlock(
+                content=content,
+                line_start=node.lineno,
+                line_end=node.end_lineno,
+                type='class',
+                name=node.name
+            ))
+    
+    def _process_function(self, node):
+        """Process function definitions."""
+        decorators = []
+        for d in node.decorator_list:
+            try:
+                decorators.append(self._safe_unparse(d))
+            except:
+                # Fallback to manual extraction
                 pass
-        """))
+        
+        if not decorators and node.decorator_list:
+            # Manual extraction of decorators
+            for i in range(len(node.decorator_list)):
+                dec_line = node.lineno - len(node.decorator_list) + i
+                if 0 < dec_line <= len(self.lines):
+                    decorators.append(self.lines[dec_line - 1].strip())
+        
+        content = self._safe_unparse(node)
+        
+        # Check if it's a route
+        route_decorators = [d for d in decorators if '@app.' in d or '@router.' in d]
+        if route_decorators:
+            self._process_route(node, route_decorators)
+        else:
+            # Regular function
+            self.utilities.append(CodeBlock(
+                content=content,
+                line_start=node.lineno,
+                line_end=node.end_lineno,
+                type='function',
+                name=node.name,
+                decorators=decorators
+            ))
+    
+    def _process_route(self, node, decorators):
+        """Process route endpoints."""
+        # Determine route type and extract info
+        route_info = RouteInfo(
+            method='get',  # default
+            path='/',
+            function_name=node.name,
+            has_html_response=False
+        )
+        
+        # Parse decorator to get method and path
+        for dec in decorators:
+            match = re.search(r'@(app|router)\.(get|post|put|delete|patch|websocket)\("([^"]+)"\)', dec)
+            if match:
+                route_info.method = match.group(2)
+                route_info.path = match.group(3)
+        
+        # Check if returns HTML
+        for stmt in ast.walk(node):
+            if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Call):
+                if hasattr(stmt.value.func, 'id') and stmt.value.func.id == 'HTMLResponse':
+                    route_info.has_html_response = True
+                    # Try to extract HTML content
+                    route_info.html_content = self._extract_html_from_return(stmt)
+        
+        content = self._safe_unparse(node)
+        
+        self.routes.append({
+            'info': route_info,
+            'code': CodeBlock(
+                content=content,
+                line_start=node.lineno,
+                line_end=node.end_lineno,
+                type='route',
+                name=node.name,
+                decorators=decorators
+            )
+        })
+    
+    def _extract_html_from_return(self, return_node):
+        """Extract HTML content from return statement."""
+        # This is a simplified extraction - in reality would need more sophisticated parsing
+        try:
+            if hasattr(return_node.value, 'keywords'):
+                for kw in return_node.value.keywords:
+                    if kw.arg == 'content':
+                        if isinstance(kw.value, ast.JoinedStr):
+                            # This is an f-string
+                            return "<!-- HTML content would be extracted here -->"
+        except:
+            pass
+        return None
+    
+    def _process_assignment(self, node: ast.Assign):
+        """Process variable assignments."""
+        try:
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    var_name = target.id
+                    # Check if it's a configuration variable
+                    if var_name.isupper() or 'config' in var_name.lower():
+                        value = self._safe_unparse(node.value)
+                        
+                        self.config_vars.append({
+                            'name': var_name,
+                            'value': value
+                        })
+        except Exception as e:
+            logger.debug(f"Could not process assignment: {e}")
+    
+    def generate_project_structure(self) -> Dict[str, str]:
+        """Generate the refactored project structure."""
+        structure = {}
+        
+        # app/__init__.py
+        structure['app/__init__.py'] = '"""StreamBeatz application package."""\n'
+        
+        # app/core/config.py
+        structure['app/core/config.py'] = self._generate_config_file()
+        
+        # app/database/models.py
+        structure['app/database/models.py'] = self._generate_models_file()
+        
+        # app/schemas.py
+        structure['app/schemas.py'] = self._generate_schemas_file()
+        
+        # app/utils.py
+        structure['app/utils.py'] = self._generate_utils_file()
+        
+        # Route files
+        route_files = self._organize_routes()
+        structure.update(route_files)
+        
+        # main.py
+        structure['main.py'] = self._generate_main_file()
+        
+        # requirements.txt
+        structure['requirements.txt'] = self._generate_requirements()
+        
+        # .env.example
+        structure['.env.example'] = self._generate_env_example()
+        
+        return structure
+    
+    def _generate_config_file(self) -> str:
+        """Generate the config.py file."""
+        content = '''"""Centralized configuration management."""
 
-        # Local module placeholders
-        for module in self.local_modules:
-            (app_dir / f"{module}.py").write_text(f"# Paste the content of {module}.py here\n")
+from pydantic_settings import BaseSettings
+from typing import Optional
 
-        # requirements.txt and README
-        (project_root / "requirements.txt").write_text("\n".join(sorted(["fastapi", "uvicorn[standard]", "SQLAlchemy[asyncio]", "asyncpg", "pydantic", "httpx", "stripe", "qrcode", "itsdangerous", "passlib[bcrypt]", "email-validator", "redis", "python-multipart", "Jinja2"])))
-        (project_root / "README.md").write_text(dedent(f"""
-            # {self.project_name}
-            **IMPORTANT**: This project requires local modules: `{', '.join(self.local_modules)}`. Paste their contents into the corresponding empty files in the `app/` directory.
+
+class Settings(BaseSettings):
+    """Application settings."""
+    
+'''
+        # Add config variables
+        for var in self.config_vars:
+            if 'os.getenv' in var['value']:
+                # Extract env var name
+                match = re.search(r'os\.getenv\(["\']([^"\']+)["\']', var['value'])
+                if match:
+                    env_name = match.group(1)
+                    # Determine type
+                    var_type = 'str'
+                    if 'int(' in var['value']:
+                        var_type = 'int'
+                    elif var['value'].lower() in ['true', 'false']:
+                        var_type = 'bool'
+                    
+                    content += f"    {var['name']}: {var_type}\n"
+        
+        content += '''
+    class Config:
+        env_file = ".env"
+
+
+settings = Settings()
+'''
+        return content
+    
+    def _generate_models_file(self) -> str:
+        """Generate the models.py file."""
+        content = '''"""SQLAlchemy ORM models."""
+
+import uuid
+from datetime import datetime
+from sqlalchemy import Column, String, Boolean, Integer, Float, DateTime, ForeignKey, Text
+from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
+
+Base = declarative_base()
+
+'''
+        for model in self.models:
+            content += model.content + '\n\n'
+        
+        return content
+    
+    def _generate_schemas_file(self) -> str:
+        """Generate the schemas.py file."""
+        content = '''"""Pydantic validation schemas."""
+
+from pydantic import BaseModel, validator, Field
+from typing import Optional, List, Dict
+from datetime import datetime
+import re
+
+'''
+        for schema in self.schemas:
+            content += schema.content + '\n\n'
+        
+        return content
+    
+    def _generate_utils_file(self) -> str:
+        """Generate the utils.py file."""
+        content = '''"""Utility functions and classes."""
+
+from app.core.config import settings
+import time
+import json
+import asyncio
+import hashlib
+import secrets
+from typing import Optional, Dict, Any
+
+'''
+        for util in self.utilities:
+            if util.type == 'function' and util.name in [
+                'hash_password', 'verify_password', 'generate_token',
+                'generate_referral_code', 'create_session', 'verify_session'
+            ]:
+                content += util.content + '\n\n'
+        
+        return content
+    
+    def _organize_routes(self) -> Dict[str, str]:
+        """Organize routes into appropriate files."""
+        route_files = defaultdict(list)
+        
+        for route_data in self.routes:
+            route = route_data['info']
+            code = route_data['code']
             
-            ## Run
-            1. `pip install -r requirements.txt`
-            2. `uvicorn app.main:app --reload`
-        """))
+            # Determine which file this route belongs to
+            if '/auth/' in route.path or '/login' in route.path or '/register' in route.path:
+                route_files['app/api/auth.py'].append(code)
+            elif '/api/requests' in route.path or '/api/queue' in route.path:
+                route_files['app/api/requests.py'].append(code)
+            elif '/api/users' in route.path or '/api/profile' in route.path:
+                route_files['app/api/users.py'].append(code)
+            elif '/api/stripe' in route.path or '/api/withdraw' in route.path:
+                route_files['app/api/payments.py'].append(code)
+            elif '/api/admin' in route.path:
+                route_files['app/api/admin.py'].append(code)
+            elif route.method == 'websocket':
+                route_files['app/services/websockets.py'].append(code)
+            elif route.has_html_response:
+                route_files['app/pages/views.py'].append(code)
+            else:
+                # Default to media
+                route_files['app/api/media.py'].append(code)
+        
+        # Generate file contents
+        result = {}
+        for filepath, routes in route_files.items():
+            content = self._generate_route_file(filepath, routes)
+            result[filepath] = content
+        
+        return result
+    
+    def _generate_route_file(self, filepath: str, routes: List[CodeBlock]) -> str:
+        """Generate a route file with proper imports and router setup."""
+        filename = filepath.split('/')[-1].replace('.py', '')
+        
+        content = f'''"""{filename.title()} route handlers."""
 
-        zip_path_str = shutil.make_archive(project_root.name, 'zip', temp_dir, self.project_name)
-        return zip_path_str
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Dict, List, Optional
 
-# --- FastAPI Endpoints ---
+router = APIRouter()
+
+'''
+        
+        for route in routes:
+            # Convert @app. to @router.
+            route_content = route.content.replace('@app.', '@router.')
+            content += route_content + '\n\n'
+        
+        return content
+    
+    def _generate_main_file(self) -> str:
+        """Generate the main.py file."""
+        return '''"""Main FastAPI application entry point."""
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from app.database.session import init_db
+from app.core.config import settings
+
+# Import routers
+from app.api import auth, requests, users, payments, media, admin
+from app.pages import views
+from app.services import websockets
+
+app = FastAPI(
+    title="StreamBeatz",
+    description="Advanced song request platform for streamers",
+    version="2.0.0"
+)
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"] if settings.DEBUG else [settings.BASE_URL],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Include routers
+app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
+app.include_router(requests.router, prefix="/api", tags=["Requests"])
+app.include_router(users.router, prefix="/api", tags=["Users"])
+app.include_router(payments.router, prefix="/api", tags=["Payments"])
+app.include_router(media.router, prefix="/api", tags=["Media"])
+app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
+app.include_router(websockets.router, tags=["WebSockets"])
+app.include_router(views.router, tags=["Pages"])
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize the application."""
+    await init_db()
+    print("StreamBeatz server started successfully!")
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy", "service": "streambeatz"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=settings.DEBUG
+    )
+'''
+    
+    def _generate_requirements(self) -> str:
+        """Generate requirements.txt based on imports."""
+        # Core requirements
+        requirements = [
+            'fastapi==0.104.1',
+            'uvicorn[standard]==0.24.0',
+            'sqlalchemy[asyncio]==2.0.23',
+            'asyncpg==0.29.0',
+            'pydantic==2.5.0',
+            'pydantic-settings==2.1.0',
+            'python-multipart==0.0.6',
+            'python-jose[cryptography]==3.3.0',
+            'passlib[bcrypt]==1.7.4',
+            'httpx==0.25.2',
+            'redis==5.0.1',
+            'stripe==7.6.0',
+            'jinja2==3.1.2',
+            'email-validator==2.1.0',
+            'python-dotenv==1.0.0'
+        ]
+        
+        # Add requirements based on imports found
+        import_to_package = {
+            'qrcode': 'qrcode[pil]==7.4.2',
+            'PIL': 'pillow==10.1.0',
+            'boto3': 'boto3==1.34.0',
+            'aiofiles': 'aiofiles==23.2.1',
+        }
+        
+        for imp in self.imports:
+            for key, package in import_to_package.items():
+                if key in imp and package not in requirements:
+                    requirements.append(package)
+        
+        return '\n'.join(sorted(requirements))
+    
+    def _generate_env_example(self) -> str:
+        """Generate .env.example file."""
+        env_vars = []
+        
+        # Extract environment variables from config
+        for var in self.config_vars:
+            if 'os.getenv' in var['value']:
+                match = re.search(r'os\.getenv\(["\']([^"\']+)["\']', var['value'])
+                if match:
+                    env_name = match.group(1)
+                    env_vars.append(f"{env_name}=")
+        
+        # Add common vars if not present
+        common_vars = [
+            'DATABASE_URL=postgresql+asyncpg://user:password@localhost/streambeatz',
+            'REDIS_URL=redis://localhost:6379/0',
+            'SECRET_KEY=your-secret-key-here',
+            'DEBUG=true'
+        ]
+        
+        content = "# StreamBeatz Environment Configuration\n\n"
+        content += "# Database\n"
+        content += "DATABASE_URL=postgresql+asyncpg://user:password@localhost/streambeatz\n\n"
+        content += "# Redis\n"
+        content += "REDIS_URL=redis://localhost:6379/0\n\n"
+        content += "# Security\n"
+        content += "SECRET_KEY=your-secret-key-here\n"
+        content += "DEBUG=false\n\n"
+        
+        if any('STRIPE' in var for var in env_vars):
+            content += "# Stripe\n"
+            content += "STRIPE_SECRET_KEY=\n"
+            content += "STRIPE_WEBHOOK_SECRET=\n\n"
+        
+        if any('SPOTIFY' in var for var in env_vars):
+            content += "# Spotify\n"
+            content += "SPOTIFY_CLIENT_ID=\n"
+            content += "SPOTIFY_CLIENT_SECRET=\n\n"
+        
+        return content
+
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
+    """Serve the main page."""
     return HTML_TEMPLATE
 
+
 @app.post("/refactor")
-async def refactor_endpoint(file: UploadFile = File(...)):
-    temp_dir = tempfile.mkdtemp()
+async def refactor_code(file: UploadFile = File(...)):
+    """Refactor the uploaded FastAPI monolith."""
+    # Validate file
+    if not file.filename.endswith('.py'):
+        return JSONResponse(
+            {"success": False, "error": "Please upload a Python (.py) file"},
+            status_code=400
+        )
+    
     try:
-        source_code = (await file.read()).decode('utf-8')
-        project_name = file.filename.replace('.py', '') + "_refactored"
+        # Read the uploaded file
+        content = await file.read()
         
-        refactorer = CodeRefactorer(source_code, project_name)
-        zip_path_str = refactorer.refactor()
+        # Check file size (50MB limit)
+        if len(content) > 50 * 1024 * 1024:
+            return JSONResponse(
+                {"success": False, "error": "File too large. Maximum size is 50MB"},
+                status_code=400
+            )
         
-        # Move zip to a downloadable location
-        final_zip_name = f"{project_name}_{int(time.time())}.zip"
-        downloadable_path = Path("temp_downloads") / final_zip_name
-        downloadable_path.parent.mkdir(exist_ok=True)
-        shutil.move(zip_path_str, downloadable_path)
+        try:
+            source_code = content.decode('utf-8')
+        except UnicodeDecodeError:
+            return JSONResponse(
+                {"success": False, "error": "Invalid file encoding. Please ensure the file is UTF-8 encoded"},
+                status_code=400
+            )
+        
+        # Count original lines
+        original_lines = len(source_code.split('\n'))
+        
+        # Create refactorer instance
+        refactorer = AdvancedCodeRefactorer(source_code)
+        refactorer.parse()
+        
+        # Generate project structure
+        project_files = refactorer.generate_project_structure()
+        
+        # Create temporary directory for the project
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir) / "streambeatz_refactored"
+            project_root.mkdir(parents=True, exist_ok=True)
+            
+            # Create all necessary directories
+            for filepath in project_files.keys():
+                file_path = project_root / filepath
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Create additional directories
+            (project_root / "static").mkdir(parents=True, exist_ok=True)
+            (project_root / "templates").mkdir(parents=True, exist_ok=True)
+            (project_root / "app").mkdir(parents=True, exist_ok=True)
+            (project_root / "app" / "api").mkdir(parents=True, exist_ok=True)
+            (project_root / "app" / "core").mkdir(parents=True, exist_ok=True)
+            (project_root / "app" / "database").mkdir(parents=True, exist_ok=True)
+            (project_root / "app" / "pages").mkdir(parents=True, exist_ok=True)
+            (project_root / "app" / "services").mkdir(parents=True, exist_ok=True)
+            
+            # Now create __init__.py files
+            (project_root / "app" / "__init__.py").touch()
+            (project_root / "app" / "api" / "__init__.py").touch()
+            (project_root / "app" / "core" / "__init__.py").touch()
+            (project_root / "app" / "database" / "__init__.py").touch()
+            (project_root / "app" / "pages" / "__init__.py").touch()
+            (project_root / "app" / "services" / "__init__.py").touch()
+            
+            # Write all files
+            for filepath, content in project_files.items():
+                file_path = project_root / filepath
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                file_path.write_text(content, encoding='utf-8')
+            
+            # Create README
+            readme_content = """# StreamBeatz - Refactored
 
-        structure = []
-        with zipfile.ZipFile(downloadable_path, 'r') as zip_ref:
-            for name in sorted(zip_ref.namelist()):
-                level = name.strip('/').count('/')
-                indent = '  ' * level
-                structure.append(f"{indent}{Path(name).name}")
+This project has been automatically refactored from a monolithic structure to a modular architecture.
 
-        return JSONResponse({
-            "success": True, "original_lines": len(source_code.splitlines()),
-            "files_created": len(structure), "structure": "\n".join(structure[:25]),
-            "download_url": f"/download/{final_zip_name}"
-        })
+## Project Structure
+
+```
+streambeatz_refactored/
+├── app/
+│   ├── api/          # API route handlers
+│   ├── core/         # Core configuration
+│   ├── database/     # Database models and session
+│   ├── pages/        # Page route handlers
+│   ├── services/     # External services
+│   ├── schemas.py    # Pydantic models
+│   └── utils.py      # Utility functions
+├── static/           # Static files
+├── templates/        # Jinja2 templates
+├── main.py          # Application entry point
+├── requirements.txt  # Python dependencies
+└── .env.example     # Environment variables template
+```
+
+## Setup Instructions
+
+1. Create a virtual environment:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\\Scripts\\activate
+   ```
+
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. Configure environment:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your configuration
+   ```
+
+4. Run the application:
+   ```bash
+   python main.py
+   ```
+
+## Next Steps
+
+1. Review and test the refactored code
+2. Extract HTML templates from route handlers
+3. Add proper error handling
+4. Implement logging
+5. Add unit tests
+6. Set up CI/CD pipeline
+"""
+            (project_root / "README.md").write_text(readme_content)
+            
+            # Create zip file
+            zip_path = Path(temp_dir) / "streambeatz_refactored.zip"
+            shutil.make_archive(str(zip_path.with_suffix('')), 'zip', project_root)
+            
+            # Generate file structure preview
+            structure = []
+            for root, dirs, files in os.walk(project_root):
+                level = root.replace(str(project_root), '').count(os.sep)
+                indent = ' ' * 2 * level
+                structure.append(f'{indent}{os.path.basename(root)}/')
+                subindent = ' ' * 2 * (level + 1)
+                for file in sorted(files):
+                    if not file.startswith('.'):
+                        structure.append(f'{subindent}{file}')
+            
+            # Save zip temporarily
+            output_dir = Path("temp_downloads")
+            output_dir.mkdir(exist_ok=True)
+            output_path = output_dir / f"refactored_{file.filename}_{int(time.time())}.zip"
+            shutil.copy(zip_path, output_path)
+            
+            return JSONResponse({
+                "success": True,
+                "original_lines": original_lines,
+                "files_created": len(project_files) + 10,  # Including __init__.py files
+                "structure": '\n'.join(structure[:20]) + '\n...',  # Show first 20 lines
+                "download_url": f"/download/{output_path.name}"
+            })
+            
+    except ValueError as e:
+        # User-friendly error messages
+        logger.error(f"Validation error: {str(e)}")
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=400
+        )
     except Exception as e:
-        logger.error("Refactoring error", exc_info=True)
-        return JSONResponse({"success": False, "detail": str(e)}, status_code=500)
-    finally:
-        shutil.rmtree(temp_dir)
+        logger.error(f"Refactoring error: {str(e)}", exc_info=True)
+        return JSONResponse(
+            {"success": False, "error": "An unexpected error occurred during refactoring. Please check your code syntax and try again."},
+            status_code=500
+        )
+
 
 @app.get("/download/{filename}")
-async def download_zip(filename: str):
-    path = Path("temp_downloads") / filename
-    if path.exists():
-        return FileResponse(path, media_type='application/zip', filename=f"{filename.split('_')[0]}.zip")
-    raise HTTPException(status_code=404, detail="File not found or expired.")
+async def download_refactored(filename: str):
+    """Download the refactored project."""
+    file_path = Path("temp_downloads") / filename
+    if file_path.exists() and file_path.is_file():
+        return FileResponse(
+            path=file_path,
+            filename=f"streambeatz_refactored.zip",
+            media_type="application/zip"
+        )
+    return JSONResponse({"error": "File not found"}, status_code=404)
+
+
+# Cleanup old downloads periodically
+async def cleanup_downloads():
+    """Remove old download files."""
+    while True:
+        await asyncio.sleep(3600)  # Every hour
+        try:
+            download_dir = Path("temp_downloads")
+            if download_dir.exists():
+                for file in download_dir.iterdir():
+                    if file.is_file():
+                        # Remove files older than 1 hour
+                        if (time.time() - file.stat().st_mtime) > 3600:
+                            try:
+                                file.unlink()
+                                logger.info(f"Cleaned up old file: {file.name}")
+                            except Exception as e:
+                                logger.error(f"Failed to delete {file}: {e}")
+        except Exception as e:
+            logger.error(f"Cleanup error: {e}")
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Start background tasks."""
+    logger.info(f"Starting FastAPI Refactoring Engine on Python {sys.version}")
+    logger.info(f"AST unparse available: {HAS_AST_UNPARSE}")
+    asyncio.create_task(cleanup_downloads())
+
 
 if __name__ == "__main__":
-    if not os.path.exists("temp_downloads"): os.makedirs("temp_downloads")
+    # For local development
     uvicorn.run(app, host="0.0.0.0", port=8000)
