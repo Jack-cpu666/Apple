@@ -1,8 +1,10 @@
 import os
 import ast
 import zipfile
+import sys
 from io import BytesIO
 from textwrap import dedent
+from typing import List
 
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -13,11 +15,11 @@ unparse = ast.unparse
 
 # --- Main Application ---
 app = FastAPI(
-    title="Monolith to Microservice Converter",
-    description="Upload your monolithic FastAPI script to convert it into a structured project."
+    title="Monolith to Structured Project Converter",
+    description="Upload your monolithic FastAPI script to convert it into a structured project with placeholders for local dependencies."
 )
 
-# --- Static Content (HTML Templates, etc.) ---
+# --- Static Content (HTML Template) ---
 
 HOME_PAGE_HTML = """
 <!DOCTYPE html>
@@ -71,14 +73,14 @@ HOME_PAGE_HTML = """
         <div class="card p-8">
             <form id="uploadForm" action="/restructure" method="post" enctype="multipart/form-data">
                 <div class="mb-6">
-                    <label for="project_name" class="block mb-2 text-sm font-medium text-gray-300">Project Name</label>
+                    <label for="project_name" class="block mb-2 text-sm font-medium text-gray-300">New Project Name</label>
                     <input type="text" id="project_name" name="project_name" value="streambeatz_project" required
                            class="w-full bg-gray-900 border border-gray-600 text-white rounded-lg p-2.5 focus:ring-indigo-500 focus:border-indigo-500">
                 </div>
                 <div class="mb-6">
                     <label class="file-label" for="file_upload">
                         <span id="file-text">Click to upload your monolithic Python file</span>
-                        <input type="file" id="file_upload" name="file" class="hidden" accept=".py">
+                        <input type="file" id="file_upload" name="file" class="hidden" accept=".py" required>
                     </label>
                 </div>
                 <button type="submit" class="btn w-full">
@@ -106,7 +108,7 @@ HOME_PAGE_HTML = """
             }
         });
 
-        form.addEventListener('submit', () => {
+        form.addEventListener('submit', (event) => {
             if (fileInput.files.length === 0) {
                 alert('Please select a file to upload.');
                 event.preventDefault();
@@ -123,71 +125,86 @@ HOME_PAGE_HTML = """
 
 # --- Code Analysis and Restructuring Logic ---
 
+class LocalModuleDetector(ast.NodeVisitor):
+    """
+    AST Visitor to detect imports that are likely local modules.
+    """
+    def __init__(self):
+        # A set of known third-party libraries from the monolith's requirements.
+        self.known_packages = {
+            "fastapi", "uvicorn", "sqlalchemy", "pydantic", "httpx", "stripe",
+            "qrcode", "itsdangerous", "passlib", "email_validator", "redis",
+            "os", "uuid", "time", "json", "asyncio", "hashlib", "hmac", "logging",
+            "re", "secrets", "sys", "textwrap", "typing", "io"
+        }
+        # Add Python's standard library modules for more accuracy
+        self.known_packages.update(sys.stdlib_module_names)
+        self.local_modules = set()
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            # A local module likely won't have dots in its top-level import
+            if '.' not in alias.name and alias.name not in self.known_packages:
+                self.local_modules.add(alias.name)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node):
+        if node.module and '.' not in node.module and node.module not in self.known_packages:
+            self.local_modules.add(node.module)
+        self.generic_visit(node)
+
+
 class CodeCategorizer(ast.NodeVisitor):
+    """
+    AST Visitor to categorize code elements into logical groups.
+    """
     def __init__(self):
         self.categories = {
             "imports": [], "config": [], "models": [], "schemas": [],
-            "dbsession": [], "services": [], "dependencies": [],
-            "routes": [], "main_app": [], "startup_events": [], "other": []
+            "db_setup": [], "services": [], "dependencies": [],
+            "routes": [], "main_app": [], "other_globals": []
         }
         self.fastapi_app_name = "app"
 
-    def visit_Import(self, node):
-        self.categories["imports"].append(node)
-
-    def visit_ImportFrom(self, node):
-        self.categories["imports"].append(node)
-
     def visit_Assign(self, node):
-        # This is a simplified check. A real-world scenario might be more complex.
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             name = node.targets[0].id
-            if name.isupper():
-                self.categories["config"].append(node)
-            elif name in ["engine", "AsyncSessionLocal", "Base", "redis_client", "pwd_context", "signer"]:
-                self.categories["dbsession"].append(node)
-            elif name == "app":
-                self.fastapi_app_name = name
-                self.categories["main_app"].append(node)
-            else:
-                self.categories["other"].append(node)
-        else:
-            self.categories["other"].append(node)
+            if name.isupper(): self.categories["config"].append(node)
+            elif name in ["engine", "AsyncSessionLocal", "Base", "redis_client"]: self.categories["db_setup"].append(node)
+            elif name == "app": self.fastapi_app_name = name; self.categories["main_app"].append(node)
+            else: self.categories["other_globals"].append(node)
+        else: self.categories["other_globals"].append(node)
 
     def visit_ClassDef(self, node):
-        # Check for base classes to categorize
-        if any(getattr(b, 'id', None) == 'Base' for b in node.bases):
-            self.categories["models"].append(node)
-        elif any(getattr(b, 'id', None) == 'BaseModel' for b in node.bases):
-            self.categories["schemas"].append(node)
-        else:
-            self.categories["other"].append(node)
+        bases = {getattr(b, 'id', None) for b in node.bases}
+        if 'Base' in bases: self.categories["models"].append(node)
+        elif 'BaseModel' in bases: self.categories["schemas"].append(node)
+        else: self.categories["other_globals"].append(node)
 
     def visit_FunctionDef(self, node):
-        is_route = False
-        is_startup = False
-        for decorator in node.decorator_list:
-            if isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Attribute):
-                if getattr(decorator.func.value, 'id', None) == self.fastapi_app_name:
-                    if decorator.func.attr in ['get', 'post', 'put', 'delete', 'websocket', 'exception_handler']:
-                        is_route = True
-                    elif decorator.func.attr == 'on_event' and decorator.args and isinstance(decorator.args[0], ast.Constant) and decorator.args[0].value == 'startup':
-                        is_startup = True
+        is_route = any(
+            isinstance(d, ast.Call) and
+            getattr(d.func, 'value', None) and
+            getattr(d.func.value, 'id', None) == self.fastapi_app_name and
+            getattr(d.func, 'attr', None) in {'get', 'post', 'put', 'delete', 'websocket', 'on_event', 'exception_handler'}
+            for d in node.decorator_list
+        )
+        if is_route: self.categories["routes"].append(node)
+        elif node.name in ['get_db', 'get_current_user', 'require_user', 'require_streamer']: self.categories["dependencies"].append(node)
+        else: self.categories["services"].append(node)
 
-        if is_route:
-            self.categories["routes"].append(node)
-        elif is_startup:
-            self.categories["startup_events"].append(node)
-        elif node.name in ['get_db', 'get_current_user', 'require_user', 'require_streamer', 'get_admin_user']:
-            self.categories["dependencies"].append(node)
-        elif node.name.startswith(('__', 'test_')):
-            self.categories["other"].append(node) # Ignore private/test functions for now
-        else:
-            self.categories["services"].append(node)
 
 def restructure_code(code: str, project_name: str):
     """Main function to parse and restructure the code."""
     tree = ast.parse(code)
+
+    # 1. Detect local modules first
+    detector = LocalModuleDetector()
+    detector.visit(tree)
+    local_modules = detector.local_modules
+    print(f"Detected local modules: {local_modules}")
+
+    # 2. Categorize all code elements
     categorizer = CodeCategorizer()
     categorizer.visit(tree)
     
@@ -205,195 +222,172 @@ def restructure_code(code: str, project_name: str):
         for d in dirs:
             zf.writestr(f"{d}/__init__.py", "")
 
-        # --- Create individual files ---
+        # 3. Create placeholder files for detected local modules in `app/`
+        for module_name in local_modules:
+            placeholder_content = dedent(f"""
+            # This is an auto-generated placeholder for your local module '{module_name}.py'.
+            # The restructuring algorithm detected that your main script imports this file.
+            # 
+            # PLEASE PASTE THE ORIGINAL CONTENTS OF '{module_name}.py' HERE.
+            """)
+            zf.writestr(f"{app_path}/{module_name}.py", placeholder_content)
 
-        # 1. Config
-        config_code = "# --- Configuration variables ---\n\nimport os\n\n"
-        config_code += "\n".join([unparse(node) for node in categorizer.categories["config"]])
+        # 4. Create structured files from categorized code
+        
+        # Config
+        config_code = "import os\n\n" + "\n".join([unparse(node) for node in categorizer.categories["config"]])
         zf.writestr(f"{app_path}/core/config.py", config_code)
 
-        # 2. DB Session
+        # DB Session
+        db_code = "from sqlalchemy.orm import declarative_base\n\n" + unparse(categorizer.categories["db_setup"][0])
+        zf.writestr(f"{app_path}/db/base.py", db_code)
+        
         db_session_code = dedent("""
-            import os
             from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-            from sqlalchemy.orm import declarative_base
-            from .config import DATABASE_URL, REDIS_URL
-
-            if DATABASE_URL and DATABASE_URL.startswith('postgresql'):
-                engine = create_async_engine(DATABASE_URL, echo=False)
-                AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
-            else:
-                engine = None
-                AsyncSessionLocal = None
+            from app.core.config import DATABASE_URL
             
-            Base = declarative_base()
-
-            # Redis (optional)
-            redis_client = None
-            try:
-                import redis.asyncio as redis
-                if REDIS_URL:
-                    redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-            except ImportError:
-                pass
+            engine = create_async_engine(DATABASE_URL, pool_pre_ping=True)
+            AsyncSessionLocal = async_sessionmaker(autocommit=False, autoflush=False, bind=engine)
         """)
         zf.writestr(f"{app_path}/db/session.py", db_session_code)
-        
-        # 3. Models
+
+        # Models
         model_imports = dedent("""
             import uuid
             from datetime import datetime
             from sqlalchemy import (Column, String, Boolean, Integer, Float, DateTime, 
                                     ForeignKey, Text, Index, UniqueConstraint, func)
             from sqlalchemy.orm import relationship
-            from sqlalchemy.dialects.postgresql import UUID, JSONB
-            from app.db.session import Base
+            from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
+            from app.db.base import Base
         """)
-        for model_class in categorizer.categories["models"]:
-            filename = f"{model_class.name.lower()}.py"
-            file_content = model_imports + "\n\n" + unparse(model_class)
-            zf.writestr(f"{app_path}/models/{filename}", file_content)
+        for model in categorizer.categories["models"]:
+            zf.writestr(f"{app_path}/models/{model.name.lower()}.py", model_imports + "\n\n" + unparse(model))
 
-        # 4. Schemas
+        # Schemas
         schema_imports = dedent("""
-            from typing import Optional, List, Dict, Any
             from pydantic import BaseModel, validator, Field
-            from datetime import datetime
+            from typing import Optional, List
             import re
             from email_validator import validate_email, EmailNotValidError
         """)
-        for schema_class in categorizer.categories["schemas"]:
-            filename = f"{schema_class.name.lower()}.py"
-            file_content = schema_imports + "\n\n" + unparse(schema_class)
-            zf.writestr(f"{app_path}/schemas/{filename}", file_content)
+        for schema in categorizer.categories["schemas"]:
+             zf.writestr(f"{app_path}/schemas/{schema.name.lower()}.py", schema_imports + "\n\n" + unparse(schema))
+        
+        # Services & Other Globals
+        services_code = dedent("""
+            # This file contains business logic, helper functions, and other global objects.
+            import os
+            import time
+            import secrets
+            from passlib.context import CryptContext
+            from itsdangerous import URLSafeTimedSerializer
+            from app.core.config import SESSION_SECRET
+        """) + "\n\n" + "\n\n".join(unparse(n) for n in categorizer.categories['other_globals'] + categorizer.categories['services'])
+        zf.writestr(f"{app_path}/services/utils.py", services_code)
 
-        # 5. Services & Dependencies
-        zf.writestr(f"{app_path}/services.py", "# --- Business Logic and Helper Functions ---\n\n" +
-                    "import time\nimport secrets\nfrom datetime import datetime\nfrom passlib.context import CryptContext\n\n" +
-                    "\n\n".join([unparse(s) for s in categorizer.categories["services"]]))
-        
-        zf.writestr(f"{app_path}/dependencies.py", "# --- FastAPI Dependencies ---\n\n" +
-                    "from typing import Optional, Dict\nfrom fastapi import Depends, HTTPException, Request\nfrom sqlalchemy.ext.asyncio import AsyncSession\n\n"
-                    "from .db.session import AsyncSessionLocal\n\n" +
-                    "\n\n".join([unparse(d) for d in categorizer.categories["dependencies"]]))
-        
-        # 6. API Routers and HTML Templates
+        # Dependencies
+        deps_code = dedent("""
+            from fastapi import Depends, HTTPException, Request
+            from sqlalchemy.ext.asyncio import AsyncSession
+            from app.db.session import AsyncSessionLocal
+            # Add other necessary imports here
+        """) + "\n\n" + "\n\n".join(unparse(n) for n in categorizer.categories['dependencies'])
+        zf.writestr(f"{app_path}/dependencies.py", deps_code)
+
+        # API Routers and HTML Templates
         routes_by_prefix = {}
+        # ... (same logic as before to group routes by prefix) ...
         for route in categorizer.categories["routes"]:
-            # Extract URL path to group routes
-            path = route.decorator_list[0].args[0].value
-            prefix = "/" + path.split('/')[1]
-            if prefix not in routes_by_prefix:
-                routes_by_prefix[prefix] = []
-            
-            # Check for and extract HTML
-            if "HTMLResponse" in unparse(route):
-                # This is a complex task. We'll simplify by finding the f-string.
-                html_fstring_node = None
-                for node in ast.walk(route.body[-1]): # Assume return is the last statement
-                    if isinstance(node, ast.JoinedStr):
-                        html_fstring_node = node
-                        break
-                
-                if html_fstring_node:
-                    html_content = "".join([s.value for s in html_fstring_node.values if isinstance(s, ast.Constant)])
-                    # Create a sensible filename
-                    template_name = path.replace('/', '_').strip('_') + ".html"
-                    zf.writestr(f"{base_path}/templates/{template_name}", dedent(html_content))
-                    
-                    # Replace the return statement with a template render
-                    new_return = ast.Return(value=ast.Call(
-                        func=ast.Attribute(value=ast.Name(id="templates", ctx=ast.Load()), attr="TemplateResponse", ctx=ast.Load()),
-                        args=[ast.Constant(value=template_name), ast.Constant(value={"request": ast.Name(id="request", ctx=ast.Load())})], # Simplified context
-                        keywords=[]
-                    ))
-                    route.body[-1] = new_return
-
-            routes_by_prefix[prefix].append(route)
+            path_arg = route.decorator_list[0].args[0]
+            if isinstance(path_arg, ast.Constant):
+                path = path_arg.value
+                prefix = "/" + path.split('/')[1] if path.count('/') > 0 else "/root"
+                if prefix not in routes_by_prefix: routes_by_prefix[prefix] = []
+                routes_by_prefix[prefix].append(route)
         
-        # Write router files
-        router_files = []
+        all_router_names = []
         for prefix, routes in routes_by_prefix.items():
-            router_name = prefix.replace('/', '') or 'root'
-            router_filename = f"{router_name}.py"
-            router_files.append(router_name)
-            
-            router_code = "from fastapi import APIRouter, Depends, Request, Response\n"
-            router_code += "from fastapi.responses import HTMLResponse, RedirectResponse\n"
-            router_code += "from sqlalchemy.ext.asyncio import AsyncSession\n"
-            router_code += "from app.dependencies import get_db, require_user, require_streamer\n\n"
+            router_name = prefix.strip('/').replace('-', '_') or 'root'
+            all_router_names.append(router_name)
+            router_code = "from fastapi import APIRouter, Depends, Request, Response, Form, Query, UploadFile, File\n"
+            router_code += "from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse\n"
+            router_code += "# Add all necessary imports from your project here, e.g.:\n"
+            router_code += "# from app.schemas.user import UserCreate\n"
+            router_code += "# from app.services.utils import hash_password\n\n"
             router_code += "router = APIRouter()\n\n"
             
             for route in routes:
-                # Change decorator from app.get to router.get
                 decorator_func = route.decorator_list[0].func
                 decorator_func.value.id = "router"
+                
+                # Extract and save HTML
+                if "HTMLResponse" in unparse(route):
+                    html_fstring_node = next((n for n in ast.walk(route.body[-1]) if isinstance(n, ast.JoinedStr)), None)
+                    if html_fstring_node:
+                        html_content = "".join([s.value for s in html_fstring_node.values if isinstance(s, ast.Constant)])
+                        template_name = f"{router_name}_{route.name}.html"
+                        zf.writestr(f"{base_path}/templates/{template_name}", dedent(html_content))
+                        
+                        # Replace return with a placeholder for template rendering
+                        route.body[-1] = ast.Expr(value=ast.Constant(value=f"... # Return TemplateResponse('{template_name}') here"))
+                
                 router_code += unparse(route) + "\n\n"
-            zf.writestr(f"{app_path}/api/{router_filename}", router_code)
 
-        # 7. Main app file
+            zf.writestr(f"{app_path}/api/{router_name}_routes.py", router_code)
+
+        # Main app file
         main_py_code = dedent(f"""
             from fastapi import FastAPI
             from fastapi.middleware.cors import CORSMiddleware
-            from fastapi.templating import Jinja2Templates
-            from app.core.config import BASE_URL
         """)
-        for router_name in router_files:
-            main_py_code += f"from app.api import {router_name}\n"
+        for name in all_router_names:
+            main_py_code += f"from app.api import {name}_routes\n"
         
         main_py_code += dedent(f"""
 
-            app = FastAPI(
-                title="{project_name}",
-                version="1.0.0"
-            )
-
-            templates = Jinja2Templates(directory="templates")
+            app = FastAPI(title="{project_name}")
 
             app.add_middleware(
                 CORSMiddleware,
-                allow_origins=["*"],
-                allow_credentials=True,
-                allow_methods=["*"],
-                allow_headers=["*"],
+                allow_origins=["*"], allow_credentials=True,
+                allow_methods=["*"], allow_headers=["*"],
             )
-
-            # Include API routers
         """)
-        for router_name in router_files:
-            main_py_code += f"app.include_router({router_name}.router, tags=[\"{router_name}\"])\n"
+        for name in all_router_names:
+            main_py_code += f"app.include_router({name}_routes.router, prefix='/{name if name != 'root' else ''}', tags=['{name}'])"
 
-        zf.writestr(f"{app_path}/main.py", main_py_code)
+        zf.writestr(f"{base_path}/app/main.py", main_py_code)
 
-        # 8. Requirements.txt
-        # Simplified based on the provided script
+        # Requirements.txt
         requirements = [
-            "fastapi", "uvicorn[standard]", "SQLAlchemy", "asyncpg",
+            "fastapi", "uvicorn[standard]", "SQLAlchemy==2.0.23", "asyncpg",
             "pydantic", "httpx", "stripe", "qrcode", "itsdangerous",
-            "passlib[bcrypt]", "email_validator", "redis", "python-multipart", "Jinja2"
+            "passlib[bcrypt]", "email-validator", "redis", "python-multipart", "Jinja2"
         ]
         zf.writestr(f"{base_path}/requirements.txt", "\n".join(requirements))
         
-        # 9. .gitignore
-        gitignore = dedent("""
-            # Byte-compiled / optimized / DLL files
-            __pycache__/
-            *.py[cod]
-            *$py.class
+        # README
+        readme = dedent(f"""
+        # {project_name.replace('_', ' ').title()}
 
-            # Environment
-            .env
-            venv/
-            
-            # IDEs
-            .vscode/
-            .idea/
+        This project was automatically restructured.
+
+        **IMPORTANT:** The script detected that you import the following local modules: `{', '.join(local_modules)}`. 
+        Empty placeholder files have been created for them inside the `app/` directory. 
+        **You must paste your original code into these files for the application to work.**
+
+        ## How to Run
+        1. `python -m venv venv`
+        2. `source venv/bin/activate`
+        3. `pip install -r requirements.txt`
+        4. `uvicorn app.main:app --reload`
         """)
-        zf.writestr(f"{base_path}/.gitignore", gitignore)
+        zf.writestr(f"{base_path}/README.md", readme)
+
 
     zip_buffer.seek(0)
     return zip_buffer
-
 
 # --- FastAPI Endpoints ---
 
@@ -414,12 +408,11 @@ async def restructure_endpoint(project_name: str = Form(...), file: UploadFile =
     try:
         zip_buffer = restructure_code(code_string, project_name)
     except Exception as e:
-        # Provide a more helpful error message
+        import traceback
         error_html = f"""
         <h1>Restructuring Failed</h1>
-        <p>An error occurred while processing your file:</p>
-        <pre style='background: #222; padding: 1rem; border-radius: 5px; color: #ff5555;'>{e}</pre>
-        <p>This can happen if the script has complex syntax that the parser cannot automatically handle. Please check the file and try again.</p>
+        <p>An error occurred: {e}</p>
+        <pre style='background:#222;padding:1rem;border-radius:5px;color:#ff5555;'>{traceback.format_exc()}</pre>
         """
         return HTMLResponse(content=error_html, status_code=500)
 
@@ -431,4 +424,4 @@ async def restructure_endpoint(project_name: str = Form(...), file: UploadFile =
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
