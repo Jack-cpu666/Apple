@@ -2807,8 +2807,8 @@ def chat():
                 response = client.chat.completions.create(
                     model="gemini-2.5-pro",
                     messages=messages,
-                    max_tokens=60000,
-                    temperature=0.9
+                    max_tokens=8000,
+                    temperature=0.8
                 )
                 
                 ai_response = response.choices[0].message.content
