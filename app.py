@@ -2,7 +2,7 @@
 Jack's AI - Ultra Modern Web Application (No Authentication)
 Open access version - No login required
 Author: Jack's AI System
-Version: 3.1.0 (Refactored JavaScript)
+Version: 3.2.0 (Proxy Fix for Deployment)
 """
 
 import os
@@ -11,7 +11,7 @@ import base64
 import hashlib
 import secrets
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import wraps
 from io import BytesIO
 import mimetypes
@@ -19,16 +19,18 @@ import random
 import string
 
 # Import Flask and related libraries for web framework
-from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for, make_response
-from werkzeug.security import generate_password_hash, check_password_hash
+from flask import Flask, render_template_string, request, jsonify
 from werkzeug.utils import secure_filename
 
-# Import OpenAI library to interact with Gemini API
+# Import AI and HTTP libraries
 from openai import OpenAI
-from PIL import Image  # For image processing
-import PyPDF2  # For PDF processing
-import docx  # For Word document processing
-import openpyxl  # For Excel processing
+import httpx  # <-- ADD THIS IMPORT
+
+# Import document processing libraries
+from PIL import Image
+import PyPDF2
+import docx
+import openpyxl
 
 # Initialize Flask application
 app = Flask(__name__)
@@ -1344,7 +1346,7 @@ HTML_TEMPLATE = """
                                 <span>Context Window</span>
                             </div>
                             <div class="token-count">
-                                <span id="tokenCount">0</span> / 125,000 tokens
+                                <span id="tokenCount">0</span> / 1,000,000 tokens
                             </div>
                         </div>
                         <div class="token-progress">
@@ -1443,6 +1445,7 @@ HTML_TEMPLATE = """
             // --- STATE AND INITIALIZATION ---
             let chatHistory = [];
             let tokenUsage = 0;
+            const maxTokens = 1000000;
             let selectedPromptType = 'enhanced';
             let currentPrompt = '';
             let enhancedPrompt = '';
@@ -1481,6 +1484,7 @@ HTML_TEMPLATE = """
                         displayChatHistory();
                     } catch (e) {
                         console.error('Error loading chat history:', e);
+                        localStorage.removeItem('chatHistory');
                     }
                 }
                 const savedTokens = localStorage.getItem('tokenUsage');
@@ -1556,15 +1560,15 @@ HTML_TEMPLATE = """
                         tokenUsage = data.token_usage || tokenUsage;
                         updateTokenBar();
                         localStorage.setItem('tokenUsage', tokenUsage.toString());
-                        if (tokenUsage > 100000) {
+                        if (tokenUsage > maxTokens * 0.8) {
                             showNotification('Approaching context limit. Consider starting a new chat.', 'warning');
                         }
                     } else {
-                        showNotification(data.error || 'Failed to get response', 'error');
+                        addMessageToUI('assistant', `Sorry, an error occurred: ${data.error || 'Unknown error'}`);
                     }
                 } catch (error) {
                     console.error('Error processing message:', error);
-                    showNotification('Network error. Please try again.', 'error');
+                    addMessageToUI('assistant', 'Sorry, a network error occurred. Please try again.');
                 } finally {
                     typingIndicator.classList.remove('active');
                     sendButton.disabled = false;
@@ -1611,7 +1615,7 @@ HTML_TEMPLATE = """
             }
             
             function updateTokenBar() {
-                const percentage = Math.min((tokenUsage / 125000) * 100, 100);
+                const percentage = Math.min((tokenUsage / maxTokens) * 100, 100);
                 const fill = document.getElementById('tokenFill');
                 if (!fill) return;
                 fill.style.width = percentage + '%';
@@ -1630,7 +1634,9 @@ HTML_TEMPLATE = """
                     <i class="fas fa-times notification-close"></i>`;
                 notification.querySelector('.notification-close').onclick = () => notification.remove();
                 document.body.appendChild(notification);
-                setTimeout(() => notification.remove(), 5000);
+                setTimeout(() => {
+                    if (notification) notification.remove();
+                }, 5000);
             }
 
             function autoResizeTextarea() {
@@ -1648,7 +1654,7 @@ HTML_TEMPLATE = """
             }
             
             function newChat() {
-                if (confirm('Start a new chat? Current conversation will be saved.')) {
+                if (confirm('Start a new chat? Current conversation will be cleared.')) {
                     chatHistory = [];
                     tokenUsage = 0;
                     updateTokenBar();
@@ -1662,14 +1668,7 @@ HTML_TEMPLATE = """
 
             function clearChat() {
                 if (confirm('Clear all messages? This cannot be undone.')) {
-                    chatHistory = [];
-                    tokenUsage = 0;
-                    updateTokenBar();
-                    localStorage.removeItem('chatHistory');
-                    localStorage.removeItem('tokenUsage');
-                    messagesContainer.innerHTML = `<div class="date-divider"><span>Today</span></div>`;
-                    addMessageToUI('assistant', 'Chat cleared! How can I help you today?', false);
-                    showNotification('Chat cleared', 'success');
+                    newChat(); // Functionally the same
                 }
             }
 
@@ -1678,7 +1677,7 @@ HTML_TEMPLATE = """
                     showNotification('Chat is too short to compact', 'warning');
                     return;
                 }
-                if (confirm('Compact this conversation to reduce token usage?')) {
+                if (confirm('Compact this conversation to reduce token usage? This will replace the current chat history.')) {
                     showLoading();
                     try {
                         const response = await fetch('/compact_chat', {
@@ -1690,7 +1689,7 @@ HTML_TEMPLATE = """
                         if (data.success) {
                             messagesContainer.innerHTML = `<div class="date-divider"><span>Compacted</span></div>`;
                             chatHistory = [{ role: 'assistant', content: 'Chat compacted. Summary:\\n\\n' + data.summary }];
-                            addMessageToUI('assistant', chatHistory[0].content, false);
+                            addMessageToUI('assistant', chatHistory[0].content, false); // display only
                             tokenUsage = data.token_usage || 0;
                             updateTokenBar();
                             localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
@@ -1737,18 +1736,16 @@ HTML_TEMPLATE = """
             }
             
             function toggleFileUpload() {
-                if (!fileUploadSection.classList.contains('active')) {
-                    fileUploadSection.classList.add('active');
+                fileUploadSection.classList.toggle('active');
+                if (fileUploadSection.classList.contains('active')) {
                     fileInput.click();
-                } else {
-                    fileUploadSection.classList.remove('active');
                 }
             }
 
             function handleFileSelect(event) {
                 const files = event.target.files;
                 const placeholder = filesPreview.querySelector('.drop-zone-text');
-                if (placeholder) placeholder.style.display = 'none';
+                if (placeholder && files.length > 0) placeholder.style.display = 'none';
 
                 for (let file of files) {
                     if (file.size > 100 * 1024 * 1024) {
@@ -1813,7 +1810,7 @@ HTML_TEMPLATE = """
             // --- INITIALIZATION ---
             function loadThemePreference() {
                 const savedTheme = localStorage.getItem('theme');
-                isDarkTheme = savedTheme === 'dark';
+                isDarkTheme = savedTheme !== 'light'; // Default to dark if not set
                 document.documentElement.setAttribute('data-theme', isDarkTheme ? 'dark' : 'light');
                 themeIcon.className = isDarkTheme ? 'fas fa-moon' : 'fas fa-sun';
             }
@@ -1821,7 +1818,7 @@ HTML_TEMPLATE = """
             createParticles();
             loadThemePreference();
             initializeSession();
-            // Manually add copy listener to initial message
+            
             const initialMessage = document.querySelector('.message.assistant');
             if (initialMessage) {
                 initialMessage.querySelector('.message-action').addEventListener('click', () => copyMessage(initialMessage));
@@ -1838,24 +1835,20 @@ HTML_TEMPLATE = """
             });
             fileInput.addEventListener('change', handleFileSelect);
 
-            // Header Buttons
             document.querySelector('.new-chat-btn').addEventListener('click', newChat);
             document.querySelector('.header-btn[title="Toggle Theme"]').addEventListener('click', toggleTheme);
             document.querySelector('.header-btn[title="Compact Chat"]').addEventListener('click', compactChat);
             document.querySelector('.header-btn[title="Export Chat"]').addEventListener('click', exportChat);
             document.querySelector('.header-btn[title="Clear Chat"]').addEventListener('click', clearChat);
             
-            // Input Area Buttons
             sendButton.addEventListener('click', sendMessage);
             document.querySelector('.input-action-btn[title="Attach Files"]').addEventListener('click', toggleFileUpload);
             document.querySelector('.input-action-btn[title*="Voice Input"]').addEventListener('click', toggleVoiceInput);
             
-            // Quick Actions
             document.querySelectorAll('.quick-action').forEach(btn => {
                 btn.addEventListener('click', () => insertPrompt(btn.dataset.prompt));
             });
 
-            // Modal Buttons
             document.querySelector('#promptModal .modal-btn-secondary').addEventListener('click', closePromptModal);
             document.querySelector('#promptModal .modal-btn-primary').addEventListener('click', confirmPromptSelection);
             document.getElementById('originalOption').addEventListener('click', () => selectPromptOption('original'));
@@ -1873,53 +1866,54 @@ current_key_index = 0
 def get_api_keys():
     """Get API keys from environment variables"""
     global API_KEYS
+    API_KEYS = [] # Reset on each call to allow for dynamic re-loading if needed
     for i in range(1, 11):
         key = os.environ.get(f'GEMINI_API_KEY_{i}')
         if key:
             API_KEYS.append(key)
-            API_KEYS_STATUS[key] = {'failures': 0, 'last_used': None}
+            if key not in API_KEYS_STATUS:
+                API_KEYS_STATUS[key] = {'failures': 0, 'last_used': None}
     
     if not API_KEYS:
         default_key = os.environ.get('GEMINI_API_KEY')
         if default_key:
             API_KEYS.append(default_key)
-            API_KEYS_STATUS[default_key] = {'failures': 0, 'last_used': None}
+            if default_key not in API_KEYS_STATUS:
+                API_KEYS_STATUS[default_key] = {'failures': 0, 'last_used': None}
     
     if not API_KEYS:
-        print("WARNING: No API keys found! Please set GEMINI_API_KEY environment variables.")
-        # Fallback for local testing without env vars, replace with a real key if needed
-        # API_KEYS.append("YOUR_API_KEY_HERE") 
+        print("WARNING: No GEMINI_API_KEY environment variables found. The application will not be able to contact the AI.")
 
 def get_next_api_key():
     """Rotate through available API keys"""
     global current_key_index
     
     if not API_KEYS:
-        get_api_keys() # Attempt to load them
-        if not API_KEYS: # If still no keys, return a placeholder
-            print("ERROR: No usable API keys are configured.")
-            return "NO_KEY_CONFIGURED"
-
+        print("ERROR: No usable API keys are configured.")
+        return "NO_KEY_CONFIGURED"
     
-    attempts = 0
-    while attempts < len(API_KEYS):
+    start_index = current_key_index
+    while True:
         key = API_KEYS[current_key_index]
+        status = API_KEYS_STATUS.get(key, {})
         
-        # Simple failure check, can be expanded with time-based lockout
-        if API_KEYS_STATUS.get(key, {}).get('failures', 0) < 3:
-            API_KEYS_STATUS[key]['last_used'] = datetime.now()
+        # Allow reuse if a key hasn't failed in the last 5 minutes
+        lockout_time = datetime.now() - timedelta(minutes=5)
+        if status.get('failures', 0) < 3 or (status.get('last_used') and status.get('last_used') < lockout_time):
+            if status.get('failures', 0) >= 3: # If key is being reused after lockout, reset its failures
+                print(f"INFO: API key ...{key[-4:]} lockout expired. Resetting failure count.")
+                status['failures'] = 0
+
+            status['last_used'] = datetime.now()
             current_key_index = (current_key_index + 1) % len(API_KEYS)
             return key
         
         current_key_index = (current_key_index + 1) % len(API_KEYS)
-        attempts += 1
-    
-    # If all keys have failed, reset them and try again
-    print("WARNING: All API keys have failed recently. Resetting failure counts.")
-    for key in API_KEYS:
-        API_KEYS_STATUS[key]['failures'] = 0
-    
-    return API_KEYS[0]
+        if current_key_index == start_index:
+            # All keys are currently locked out
+            print("WARNING: All API keys are currently locked out. Waiting for a key to become available.")
+            # For simplicity, we just return one and let it fail, but a better system might wait.
+            return API_KEYS[0]
 
 def mark_api_key_failure(api_key):
     """Mark an API key as having failed"""
@@ -1927,136 +1921,78 @@ def mark_api_key_failure(api_key):
         API_KEYS_STATUS[api_key]['failures'] += 1
         print(f"INFO: Marked API key ending in ...{api_key[-4:]} as failed. Failure count: {API_KEYS_STATUS[api_key]['failures']}")
 
-
 # System prompts for the AI models
-PROMPT_ENHANCER_SYSTEM = """You are a prompt enhancement specialist. Your job is to take user prompts and make them clearer, more detailed, and more effective for an AI assistant.
+PROMPT_ENHANCER_SYSTEM = """You are a prompt enhancement specialist. Your job is to take a user prompt and make it clearer, more detailed, and more effective for a large language model. Preserve the user's original intent completely. Add context, structure the prompt for better understanding, and include specific details that will elicit a better response. Return ONLY the enhanced prompt."""
 
-Rules:
-1. Preserve the user's original intent completely
-2. Add clarity and context where helpful
-3. Structure the prompt for better AI understanding
-4. Include specific details that will help get a better response
-5. Make the prompt comprehensive but not overly long
-6. If the prompt involves analysis of files or images, specify what kind of analysis would be most helpful
+MAIN_AI_SYSTEM = """You are Jack's AI, an ultra-advanced artificial intelligence assistant powered by Gemini 2.5 Pro. You are incredibly capable, intelligent, and helpful. Your responses should be comprehensive, clear, and provide maximum value. Explain complex concepts simply, anticipate follow-up questions, and use emojis appropriately to maintain a friendly yet professional tone. 🚀"""
 
-Take the user's prompt and rewrite it to be more effective. Return ONLY the enhanced prompt, nothing else."""
-
-MAIN_AI_SYSTEM = """You are Jack's AI, an ultra-advanced artificial intelligence assistant powered by cutting-edge Gemini 2.5 Pro technology. You are incredibly capable, intelligent, and helpful.
-
-CORE PRINCIPLES:
-
-1. COMPREHENSIVE RESPONSES
-   - Provide extremely detailed, thorough answers
-   - Never use placeholders or shortcuts
-   - Include all necessary code, explanations, and examples
-   - Every response should be production-ready
-
-2. CLARITY AND EDUCATION
-   - Explain complex concepts in simple terms
-   - Use analogies and examples liberally
-   - Break down steps clearly
-   - Write as if teaching someone new to the topic
-
-3. MAXIMUM VALUE
-   - Use the full context window when beneficial
-   - Provide multiple solutions when applicable
-   - Include best practices and recommendations
-   - Anticipate follow-up questions
-
-4. CAPABILITIES
-   - Advanced code generation in any language
-   - Complex document and image analysis
-   - Creative problem solving
-   - Data analysis and visualization
-   - Research and synthesis
-   - Mathematical computations
-
-5. PERSONALITY
-   - Professional yet friendly
-   - Enthusiastic and engaging
-   - Proactive and helpful
-   - Use emojis appropriately 🚀
-
-Remember: The user has unlimited access to your capabilities. Give them exceptional, comprehensive responses that exceed expectations."""
-
-CHAT_COMPACTOR_SYSTEM = """You are a conversation summarizer. Create a comprehensive summary that preserves all important information while reducing token usage.
-
-Requirements:
-1. Keep all key facts, decisions, and outcomes
-2. Maintain chronological flow
-3. Preserve technical details and code
-4. Summarize repetitive discussions efficiently
-5. Include all solutions and answers provided
-6. Make the summary detailed enough for seamless continuation
-
-Create a thorough yet efficient summary."""
+CHAT_COMPACTOR_SYSTEM = """You are a conversation summarizer. Create a comprehensive summary of the following chat history that preserves all important facts, decisions, technical details, and outcomes. The goal is to reduce token count while making the summary detailed enough for a seamless continuation of the conversation. Output only the summary."""
 
 def create_ai_client(api_key):
-    """Create an OpenAI client configured for Gemini"""
+    """Create an OpenAI client configured for Gemini, disabling default proxies."""
+    # This explicit http_client setup is the fix for the `TypeError: ... 'proxies'` error on Render.
+    http_client = httpx.Client(proxies=None, transport=httpx.HTTPTransport(local_address="0.0.0.0"))
     return OpenAI(
         api_key=api_key,
-        base_url="https://generativelanguage.googleapis.com/v1beta/" # Corrected Base URL
+        base_url="https://generativelanguage.googleapis.com/v1beta/models",
+        http_client=http_client
     )
 
 def count_tokens(text):
-    """Estimate token count for text"""
+    """Estimate token count for text (a simple approximation)."""
     return len(text) // 4
 
 def process_file_for_ai(file):
     """Process uploaded file and convert to AI-readable format"""
     try:
+        filename = secure_filename(file.filename)
         file_content = ""
         file_type = file.content_type
+        
+        # A more robust check for text-based files
+        text_based_mimetypes = ['application/json', 'application/javascript', 'application/xml', 'application/sql']
         
         if file_type.startswith('image/'):
             img = Image.open(file)
             buffered = BytesIO()
-            # Convert images to a common format like PNG to avoid issues
-            img_format = 'PNG' if img.format in [None, 'JPEG'] else img.format
-            img.save(buffered, format=img_format)
+            img.save(buffered, format='PNG')
             img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
-            # The AI will see the image data, this is for the text context
-            file_content = f"[Image file attached: {secure_filename(file.filename)}]"
+            file_content = f"[Image file attached: {filename}]"
             return file_content, img_base64
             
         elif file_type == 'application/pdf':
             pdf_reader = PyPDF2.PdfReader(file)
-            text = ""
-            for page in pdf_reader.pages:
-                extracted = page.extract_text()
-                if extracted:
-                    text += extracted + "\\n"
-            file_content = f"[PDF file: {secure_filename(file.filename)}]\\nContent:\\n{text}"
+            text = "".join(page.extract_text() or "" for page in pdf_reader.pages)
+            file_content = f"[PDF file: {filename}]\nContent:\n{text}"
             
         elif file_type in ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword']:
             doc = docx.Document(file)
-            text = "\\n".join([paragraph.text for paragraph in doc.paragraphs])
-            file_content = f"[Word document: {secure_filename(file.filename)}]\\nContent:\\n{text}"
+            text = "\n".join([p.text for p in doc.paragraphs])
+            file_content = f"[Word document: {filename}]\nContent:\n{text}"
             
         elif file_type in ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel']:
-            workbook = openpyxl.load_workbook(file, data_only=True) # data_only to get values not formulas
+            workbook = openpyxl.load_workbook(file, data_only=True)
             text = ""
             for sheet_name in workbook.sheetnames:
                 sheet = workbook[sheet_name]
-                text += f"\\nSheet: {sheet_name}\\n"
-                for row in sheet.iter_rows(values_only=True):
-                    text += "\\t".join([str(cell) if cell is not None else "" for cell in row]) + "\\n"
-            file_content = f"[Excel file: {secure_filename(file.filename)}]\\nContent:\\n{text}"
+                text += f"\nSheet: {sheet_name}\n"
+                text += "\n".join(["\t".join([str(cell) if cell is not None else "" for cell in row]) for row in sheet.iter_rows(values_only=True)])
+            file_content = f"[Excel file: {filename}]\nContent:\n{text}"
             
-        elif file_type.startswith('text/'):
+        elif file_type.startswith('text/') or any(mime in file_type for mime in text_based_mimetypes):
             text = file.read().decode('utf-8', errors='ignore')
-            file_content = f"[Text file: {secure_filename(file.filename)}]\\nContent:\\n{text}"
+            file_content = f"[Text file: {filename}]\nContent:\n{text}"
             
         else:
-            file_content = f"[Unsupported File: {secure_filename(file.filename)}]\\n[Type: {file_type}]"
+            file_content = f"[Unsupported File: {filename}]\n[Type: {file_type}]"
         
         return file_content, None
         
     except Exception as e:
-        print(f"Error processing file {file.filename}: {e}")
+        print(f"Error processing file {secure_filename(file.filename)}: {e}")
         return f"[Error processing {secure_filename(file.filename)}: Could not read file content.]", None
 
-# Flask routes - No authentication needed
+# Flask routes
 @app.route('/')
 def index():
     """Main page"""
@@ -2066,41 +2002,34 @@ def index():
 def enhance_prompt():
     """Enhance user's prompt using AI"""
     try:
-        data = request.json
-        original_prompt = data.get('prompt', '')
-        
-        if not original_prompt or len(original_prompt) < 10: # Don't enhance very short prompts
+        original_prompt = request.json.get('prompt', '')
+        if not original_prompt or len(original_prompt) < 10:
             return jsonify({'success': False, 'error': 'Prompt too short to enhance'}), 200
         
         api_key = get_next_api_key()
         if api_key == "NO_KEY_CONFIGURED":
-            return jsonify({'success': False, 'enhanced_prompt': original_prompt}), 200
+            return jsonify({'success': True, 'enhanced_prompt': original_prompt}), 200
 
         client = create_ai_client(api_key)
         
         try:
-            response = client.completions.create(
-                model="gemini-2.5-flash", # Using a completion model for this simple task
-                prompt=f"{PROMPT_ENHANCER_SYSTEM}\\n\\nUser Prompt: \"{original_prompt}\"\\n\\nEnhanced Prompt:",
-                max_tokens=50000,
-                temperature=1
+            # Use the chat completions endpoint for consistency, as it's more standard
+            response = client.chat.completions.create(
+                model="gemini-2.5-flash",
+                messages=[
+                    {"role": "system", "content": PROMPT_ENHANCER_SYSTEM},
+                    {"role": "user", "content": original_prompt}
+                ],
+                max_tokens=500,
+                temperature=0.7
             )
-            
-            enhanced_prompt = response.choices[0].text.strip()
-            
-            return jsonify({
-                'success': True,
-                'enhanced_prompt': enhanced_prompt
-            }), 200
+            enhanced_prompt = response.choices[0].message.content.strip()
+            return jsonify({'success': True, 'enhanced_prompt': enhanced_prompt}), 200
             
         except Exception as api_error:
             print(f"API error in enhance_prompt: {api_error}")
             mark_api_key_failure(api_key)
-            # Fail gracefully by returning success but with the original prompt
-            return jsonify({
-                'success': True,
-                'enhanced_prompt': original_prompt 
-            }), 200
+            return jsonify({'success': True, 'enhanced_prompt': original_prompt}), 200
             
     except Exception as e:
         print(f"Enhance prompt error: {e}")
@@ -2116,32 +2045,26 @@ def chat():
         
         if session_id not in CHAT_SESSIONS:
             CHAT_SESSIONS[session_id] = {'history': [], 'token_usage': 0}
-        
         session_data = CHAT_SESSIONS[session_id]
         
-        file_contents = []
-        image_data = None
-        
+        full_prompt_content = [{"type": "text", "text": message}]
+        file_context_text = ""
+
         for file in files:
             if file and file.filename:
                 content, img_data = process_file_for_ai(file)
-                file_contents.append(content)
                 if img_data:
-                    # For simplicity, handle one image at a time with the prompt
-                    image_data = img_data
+                    full_prompt_content.append({"type": "image_url", "url": f"data:image/png;base64,{img_data}"})
+                file_context_text += content + "\n\n"
         
-        full_prompt_content = [{"type": "text", "text": message}]
-        if image_data:
-            full_prompt_content.append({"type": "image_url", "url": f"data:image/png;base64,{image_data}"})
-        
-        if file_contents:
-            file_text = "\\n\\n--- Attached File Context ---\\n" + "\\n".join(file_contents)
-            full_prompt_content[0]['text'] += file_text
+        if file_context_text:
+            full_prompt_content[0]['text'] += f"\n\n--- Attached File Context ---\n{file_context_text}"
 
-
-        messages = [{"role": "system", "content": MAIN_AI_SYSTEM}]
-        messages.extend(session_data['history'][-10:]) # Add recent history
-        messages.append({"role": "user", "content": full_prompt_content})
+        messages = [
+            {"role": "system", "content": MAIN_AI_SYSTEM},
+            *session_data['history'][-10:], # Add recent history
+            {"role": "user", "content": full_prompt_content[0]['text'] if len(full_prompt_content) == 1 else full_prompt_content}
+        ]
         
         api_key = get_next_api_key()
         if api_key == "NO_KEY_CONFIGURED":
@@ -2149,44 +2072,37 @@ def chat():
 
         client = create_ai_client(api_key)
         
-        max_retries = 3
+        max_retries = 2
         for attempt in range(max_retries):
             try:
                 response = client.chat.completions.create(
-                    model="gemini-2.5-pro",
+                    model="gemini-2.5-pro", # Use the correct endpoint suffix
                     messages=messages,
-                    max_tokens=6000,
-                    temperature=1
+                    max_tokens=8192,
+                    temperature=0.8
                 )
-                
                 ai_response = response.choices[0].message.content
                 
-                # Update session
-                session_data['history'].append({"role": "user", "content": message}) # only store the text part
+                # Update session history
+                user_content_for_history = full_prompt_content[0]['text']
+                session_data['history'].append({"role": "user", "content": user_content_for_history})
                 session_data['history'].append({"role": "assistant", "content": ai_response})
                 
-                token_usage = session_data['token_usage']
-                token_usage += count_tokens(full_prompt_content[0]['text']) + count_tokens(ai_response)
+                # Update token usage
+                token_usage = session_data.get('token_usage', 0)
+                token_usage += count_tokens(user_content_for_history) + count_tokens(ai_response)
                 session_data['token_usage'] = token_usage
                 
-                return jsonify({
-                    'success': True,
-                    'response': ai_response,
-                    'token_usage': token_usage
-                }), 200
+                return jsonify({'success': True, 'response': ai_response, 'token_usage': token_usage}), 200
                 
             except Exception as api_error:
                 print(f"API attempt {attempt + 1} with key ...{api_key[-4:]} failed: {api_error}")
                 mark_api_key_failure(api_key)
-                
                 if attempt < max_retries - 1:
                     api_key = get_next_api_key()
                     client = create_ai_client(api_key)
                 else:
-                    return jsonify({
-                        'success': False,
-                        'error': 'AI service temporarily unavailable. Please try again.'
-                    }), 503
+                    return jsonify({'success': False, 'error': 'AI service is temporarily unavailable. Please try again.'}), 503
         
     except Exception as e:
         print(f"Chat error: {e}")
@@ -2198,37 +2114,30 @@ def compact_chat():
     """Compact the chat history to reduce tokens"""
     try:
         session_id = request.json.get('session_id', 'default')
-        
-        if session_id not in CHAT_SESSIONS or not CHAT_SESSIONS[session_id]['history']:
+        if not (session_data := CHAT_SESSIONS.get(session_id)) or not session_data.get('history'):
             return jsonify({'success': False, 'error': 'No chat history found'}), 400
-        
-        session_data = CHAT_SESSIONS[session_id]
         
         if len(session_data['history']) < 10:
             return jsonify({'success': False, 'error': 'Chat history too short to compact'}), 400
         
-        conversation_text = ""
-        for msg in session_data['history']:
-            role = "User" if msg['role'] == 'user' else "Assistant"
-            # Ensure content is a string
-            content = msg['content'] if isinstance(msg['content'], str) else "Complex content (e.g., image)"
-            conversation_text += f"{role}: {content}\\n\\n"
+        conversation_text = "\n\n".join(f"{msg['role']}: {msg['content']}" for msg in session_data['history'])
         
         api_key = get_next_api_key()
         if api_key == "NO_KEY_CONFIGURED":
             return jsonify({'success': False, 'error': 'AI Service is not configured.'}), 503
-
         client = create_ai_client(api_key)
         
         try:
-            response = client.completions.create(
-                model="gemini-1.5-flash-latest",
-                prompt=f"{CHAT_COMPACTOR_SYSTEM}\\n\\nConversation to summarize:\\n\\n{conversation_text}\\n\\nSummary:",
-                max_tokens=2000,
-                temperature=0.7
+            response = client.chat.completions.create(
+                model="gemini-2.5-flash",
+                messages=[
+                    {"role": "system", "content": CHAT_COMPACTOR_SYSTEM},
+                    {"role": "user", "content": conversation_text}
+                ],
+                max_tokens=2048,
+                temperature=0.5
             )
-            
-            summary = response.choices[0].text.strip()
+            summary = response.choices[0].message.content.strip()
             
             session_data['history'] = [{"role": "assistant", "content": f"Previous conversation summarized as: {summary}"}]
             token_usage = count_tokens(summary)
@@ -2250,7 +2159,6 @@ get_api_keys()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    # Use 'waitress' for a production-ready server on Windows, or 'gunicorn' on Linux
-    # For simplicity, we'll stick with Flask's development server here.
-    # For production, consider: from waitress import serve; serve(app, host='0.0.0.0', port=port)
+    # For production, a proper WSGI server like Gunicorn or Waitress is recommended.
+    # Example for waitress: from waitress import serve; serve(app, host='0.0.0.0', port=port)
     app.run(host='0.0.0.0', port=port, debug=False)
