@@ -1,476 +1,826 @@
 """
-Jack's AI - Ultra Modern Web Application with Gemini API
-Fixed version with proper Google Gemini integration
-Author: Jack's AI System
-Version: 3.1.0
+Jack's AI - Complete Web Application for Render.com
+This application provides an AI assistant interface using Google Gemini models
+with prompt optimization, conversation management, and file handling capabilities.
 """
 
 import os
 import json
 import base64
+import hashlib
 import secrets
-import traceback
-from datetime import datetime
-from io import BytesIO
 import mimetypes
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple, Any
+from dataclasses import dataclass, field, asdict
+from io import BytesIO
+import traceback
+import time
+import random
 
-from flask import Flask, render_template_string, request, jsonify, session
+# Flask and related imports for web server functionality
+from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for
+from flask_cors import CORS
 from werkzeug.utils import secure_filename
+from werkzeug.datastructures import FileStorage
 
-# Google Gemini imports
+# Google Generative AI import for Gemini models
 import google.generativeai as genai
-from PIL import Image
-import PyPDF2
-import docx
-import openpyxl
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
+# Initialize Flask application with secret key for sessions
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(32)
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
+app.secret_key = secrets.token_hex(32)  # Generate a random secret key for session management
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # Set maximum upload size to 100MB
+app.config['SESSION_COOKIE_HTTPONLY'] = True  # Security: prevent JavaScript access to session cookie
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'  # Security: CSRF protection
+CORS(app)  # Enable Cross-Origin Resource Sharing for API access
 
-# Store chat sessions in memory (use Redis for production)
-CHAT_SESSIONS = {}
+# In-memory storage for all application data
+# This dictionary stores all conversations and user data in memory
+MEMORY_STORAGE = {
+    'conversations': {},  # Stores all chat conversations by session ID
+    'active_sessions': {},  # Tracks active user sessions
+    'file_cache': {},  # Temporary storage for uploaded files
+    'api_key_usage': {},  # Tracks API key usage for load balancing
+    'total_users': 0,  # Counter for total users
+    'daily_stats': {}  # Daily usage statistics
+}
 
-# HTML Template (keeping your beautiful UI exactly as is)
+# Configuration for API keys with load balancing
+# Store your Gemini API keys in environment variables GEMINI_API_KEY_1, GEMINI_API_KEY_2, etc.
+API_KEYS = []
+for i in range(1, 11):  # Load up to 10 API keys from environment
+    key = os.environ.get(f'GEMINI_API_KEY_{i}')
+    if key:
+        API_KEYS.append(key)
+        MEMORY_STORAGE['api_key_usage'][key] = {
+            'count': 0,
+            'last_used': None,
+            'failures': 0
+        }
+
+# Fallback to single API key if numbered keys not found
+if not API_KEYS:
+    default_key = os.environ.get('GEMINI_API_KEY')
+    if default_key:
+        API_KEYS.append(default_key)
+        MEMORY_STORAGE['api_key_usage'][default_key] = {
+            'count': 0,
+            'last_used': None,
+            'failures': 0
+        }
+
+# Model configuration constants
+MAX_TOKENS = 125000  # Maximum context window size
+TOKEN_WARNING_THRESHOLD = 100000  # Warn users when approaching token limit
+ALLOWED_EXTENSIONS = {
+    'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'bmp', 
+    'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+    'csv', 'json', 'xml', 'html', 'css', 'js', 'py',
+    'java', 'cpp', 'c', 'h', 'md', 'yaml', 'yml'
+}
+
+@dataclass
+class Message:
+    """
+    Represents a single message in a conversation.
+    This class stores all information about a message including content, files, and metadata.
+    """
+    role: str  # 'user' or 'assistant'
+    content: str  # The text content of the message
+    timestamp: datetime = field(default_factory=datetime.now)  # When the message was created
+    files: List[Dict] = field(default_factory=list)  # List of attached files
+    tokens_used: int = 0  # Number of tokens this message consumed
+    prompt_improved: bool = False  # Whether this message had its prompt improved
+    original_prompt: Optional[str] = None  # Original prompt before improvement
+
+@dataclass
+class Conversation:
+    """
+    Represents a complete conversation thread.
+    Manages the entire conversation history and metadata for a user session.
+    """
+    id: str  # Unique conversation identifier
+    messages: List[Message] = field(default_factory=list)  # All messages in the conversation
+    total_tokens: int = 0  # Total tokens used in this conversation
+    created_at: datetime = field(default_factory=datetime.now)  # When conversation started
+    last_activity: datetime = field(default_factory=datetime.now)  # Last activity time
+    compacted: bool = False  # Whether conversation has been compacted
+    title: Optional[str] = None  # Optional conversation title
+
+class GeminiManager:
+    """
+    Manages all interactions with Google Gemini AI models.
+    Handles API key rotation, failover, and model selection.
+    """
+    
+    def __init__(self):
+        """Initialize the Gemini manager with API keys and model configurations."""
+        self.api_keys = API_KEYS
+        self.current_key_index = 0
+        self.models = {}  # Cache for initialized models
+        self.initialize_models()
+    
+    def initialize_models(self):
+        """
+        Initialize all three Gemini models with the first available API key.
+        Sets up prompt improver, main assistant, and conversation compactor.
+        """
+        if not self.api_keys:
+            raise ValueError("No API keys found! Please set GEMINI_API_KEY environment variables.")
+        
+        # Configure the first API key
+        genai.configure(api_key=self.api_keys[0])
+        
+        # Initialize the three models we'll use
+        try:
+            # Model 1: Prompt Improver (Flash model for speed)
+            self.prompt_improver = genai.GenerativeModel(
+                model_name="gemini-1.5-flash",
+                generation_config={
+                    "temperature": 0.7,
+                    "top_p": 0.8,
+                    "top_k": 40,
+                    "max_output_tokens": 2048
+                }
+            )
+            
+            # Model 2: Main Assistant (Pro model for quality)
+            self.main_assistant = genai.GenerativeModel(
+                model_name="gemini-1.5-pro",
+                generation_config={
+                    "temperature": 0.9,
+                    "top_p": 0.95,
+                    "top_k": 40,
+                    "max_output_tokens": 8192
+                }
+            )
+            
+            # Model 3: Conversation Compactor (Flash for summarization)
+            self.compactor = genai.GenerativeModel(
+                model_name="gemini-1.5-flash",
+                generation_config={
+                    "temperature": 0.3,
+                    "top_p": 0.8,
+                    "top_k": 30,
+                    "max_output_tokens": 4096
+                }
+            )
+            
+        except Exception as e:
+            print(f"Error initializing models: {str(e)}")
+            raise
+    
+    def get_next_api_key(self) -> str:
+        """
+        Rotate to the next available API key for load balancing.
+        Implements round-robin selection with failure tracking.
+        """
+        if not self.api_keys:
+            raise ValueError("No API keys available")
+        
+        # Try to find a working API key
+        attempts = 0
+        while attempts < len(self.api_keys):
+            self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
+            key = self.api_keys[self.current_key_index]
+            
+            # Check if this key has too many recent failures
+            usage = MEMORY_STORAGE['api_key_usage'].get(key, {})
+            if usage.get('failures', 0) < 5:  # Allow up to 5 failures before skipping
+                return key
+            
+            attempts += 1
+        
+        # If all keys have failures, reset and use the first one
+        for key in self.api_keys:
+            MEMORY_STORAGE['api_key_usage'][key]['failures'] = 0
+        
+        return self.api_keys[0]
+    
+    def switch_api_key(self):
+        """
+        Switch to the next API key and reinitialize models.
+        Called when current key fails or reaches rate limits.
+        """
+        try:
+            new_key = self.get_next_api_key()
+            genai.configure(api_key=new_key)
+            self.initialize_models()
+            
+            # Update usage statistics
+            MEMORY_STORAGE['api_key_usage'][new_key]['count'] += 1
+            MEMORY_STORAGE['api_key_usage'][new_key]['last_used'] = datetime.now()
+            
+        except Exception as e:
+            print(f"Error switching API key: {str(e)}")
+            raise
+    
+    def improve_prompt(self, original_prompt: str) -> Tuple[str, bool]:
+        """
+        Use Gemini Flash to improve the user's prompt.
+        Returns improved prompt and success status.
+        """
+        system_prompt = """You are a prompt optimization expert. Your task is to improve user prompts to be clearer, more specific, and more effective for an AI assistant.
+
+        Rules for improvement:
+        1. Maintain the original intent and meaning
+        2. Add clarity and specificity where needed
+        3. Structure the prompt logically
+        4. Include relevant context if missing
+        5. Make it concise but comprehensive
+        6. Fix any grammar or spelling errors
+        7. Add specific output format requests if beneficial
+
+        Important: Return ONLY the improved prompt, nothing else. No explanations, no prefixes, just the improved prompt text."""
+        
+        try:
+            # Attempt to improve the prompt with retry logic
+            for attempt in range(3):  # Try up to 3 times with different keys
+                try:
+                    response = self.prompt_improver.generate_content(
+                        f"{system_prompt}\n\nOriginal prompt: {original_prompt}",
+                        safety_settings={
+                            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                        }
+                    )
+                    
+                    if response and response.text:
+                        return response.text.strip(), True
+                    
+                except Exception as e:
+                    print(f"Attempt {attempt + 1} failed: {str(e)}")
+                    if attempt < 2:  # Don't switch on last attempt
+                        self.switch_api_key()
+                    continue
+            
+            # If all attempts fail, return original
+            return original_prompt, False
+            
+        except Exception as e:
+            print(f"Error improving prompt: {str(e)}")
+            return original_prompt, False
+    
+    def generate_response(self, prompt: str, files: List[Dict] = None) -> Tuple[str, int]:
+        """
+        Generate a response using Gemini Pro with full context.
+        Returns the response text and token count.
+        """
+        system_prompt = """You are Jack's AI, an advanced AI assistant with extraordinary capabilities. You must ALWAYS:
+
+        1. NEVER cut corners or provide shortcuts - write complete, thorough responses
+        2. Use as many tokens as necessary to fully answer the question
+        3. Provide extremely detailed explanations as if explaining to a 12-year-old
+        4. Include comprehensive code examples when relevant - NEVER use placeholders
+        5. Write out EVERYTHING in full - no "..." or "etc." or "and so on"
+        6. Break down complex topics into simple, understandable steps
+        7. Use examples, analogies, and illustrations liberally
+        8. Double-check your work and provide complete solutions
+        9. If writing code, include detailed comments explaining every line
+        10. Structure responses with clear headings and organization
+
+        Remember: You have a 125,000 token context window - USE IT! The user wants comprehensive, detailed answers. Quality and completeness are paramount."""
+        
+        try:
+            # Prepare the full prompt with system instructions
+            full_prompt = f"{system_prompt}\n\nUser request: {prompt}"
+            
+            # Add file context if files are provided
+            if files:
+                file_context = "\n\nAttached files:\n"
+                for file in files:
+                    file_context += f"- {file['name']} ({file['type']}): {file.get('description', 'No description')}\n"
+                full_prompt += file_context
+            
+            # Generate response with retry logic
+            for attempt in range(3):
+                try:
+                    response = self.main_assistant.generate_content(
+                        full_prompt,
+                        safety_settings={
+                            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                        }
+                    )
+                    
+                    if response and response.text:
+                        # Estimate token count (rough approximation)
+                        token_count = len(response.text.split()) * 1.3
+                        return response.text, int(token_count)
+                    
+                except Exception as e:
+                    print(f"Response generation attempt {attempt + 1} failed: {str(e)}")
+                    if attempt < 2:
+                        self.switch_api_key()
+                    continue
+            
+            return "I apologize, but I'm having trouble generating a response right now. Please try again.", 0
+            
+        except Exception as e:
+            print(f"Error generating response: {str(e)}")
+            return f"An error occurred: {str(e)}", 0
+    
+    def compact_conversation(self, messages: List[Message]) -> str:
+        """
+        Compact a conversation using Gemini Flash to reduce token usage.
+        Returns a summarized version of the conversation.
+        """
+        system_prompt = """You are a conversation summarizer. Your task is to compact a conversation while preserving ALL important information, context, and details.
+
+        Rules for compaction:
+        1. Preserve all factual information, data, and specific details
+        2. Maintain the flow and context of the conversation
+        3. Keep all code snippets, formulas, and technical details intact
+        4. Summarize verbose explanations while keeping the meaning
+        5. Combine related messages when possible
+        6. Remove only truly redundant information
+        7. Maintain chronological order and conversation structure
+
+        Format your summary as a clear, structured document that can be used as context for continuing the conversation."""
+        
+        try:
+            # Build conversation text
+            conversation_text = "Conversation to compact:\n\n"
+            for msg in messages:
+                conversation_text += f"{msg.role.upper()}: {msg.content}\n"
+                if msg.files:
+                    conversation_text += f"[Attached files: {', '.join([f['name'] for f in msg.files])}]\n"
+                conversation_text += "\n"
+            
+            # Generate compacted version
+            response = self.compactor.generate_content(
+                f"{system_prompt}\n\n{conversation_text}",
+                safety_settings={
+                    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+                }
+            )
+            
+            if response and response.text:
+                return response.text
+            
+            return "Unable to compact conversation."
+            
+        except Exception as e:
+            print(f"Error compacting conversation: {str(e)}")
+            return "Error during compaction."
+
+# Initialize Gemini Manager
+gemini_manager = GeminiManager() if API_KEYS else None
+
+def get_or_create_session() -> str:
+    """
+    Get existing session ID or create a new one.
+    Manages user sessions without requiring login.
+    """
+    if 'session_id' not in session:
+        # Create new session ID
+        session['session_id'] = secrets.token_hex(16)
+        session['created_at'] = datetime.now().isoformat()
+        
+        # Initialize session in memory storage
+        MEMORY_STORAGE['active_sessions'][session['session_id']] = {
+            'created_at': datetime.now(),
+            'last_activity': datetime.now(),
+            'conversations': []
+        }
+        
+        # Increment total users counter
+        MEMORY_STORAGE['total_users'] += 1
+    
+    # Update last activity
+    MEMORY_STORAGE['active_sessions'][session['session_id']]['last_activity'] = datetime.now()
+    
+    return session['session_id']
+
+def cleanup_old_sessions():
+    """
+    Clean up sessions older than 24 hours to manage memory.
+    This function should be called periodically.
+    """
+    current_time = datetime.now()
+    sessions_to_remove = []
+    
+    for session_id, session_data in MEMORY_STORAGE['active_sessions'].items():
+        if current_time - session_data['last_activity'] > timedelta(hours=24):
+            sessions_to_remove.append(session_id)
+    
+    # Remove old sessions and their conversations
+    for session_id in sessions_to_remove:
+        # Remove conversations
+        for conv_id in MEMORY_STORAGE['active_sessions'][session_id].get('conversations', []):
+            if conv_id in MEMORY_STORAGE['conversations']:
+                del MEMORY_STORAGE['conversations'][conv_id]
+        
+        # Remove session
+        del MEMORY_STORAGE['active_sessions'][session_id]
+    
+    print(f"Cleaned up {len(sessions_to_remove)} old sessions")
+
+def process_file_upload(file: FileStorage) -> Dict:
+    """
+    Process an uploaded file and prepare it for AI analysis.
+    Returns file metadata and content information.
+    """
+    try:
+        # Secure the filename
+        filename = secure_filename(file.filename)
+        
+        # Check file extension
+        file_ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+        if file_ext not in ALLOWED_EXTENSIONS:
+            return {'error': f'File type .{file_ext} not allowed'}
+        
+        # Read file content
+        file_content = file.read()
+        file_size = len(file_content)
+        
+        # Reset file pointer
+        file.seek(0)
+        
+        # Prepare file data based on type
+        file_data = {
+            'name': filename,
+            'type': file.content_type or mimetypes.guess_type(filename)[0],
+            'size': file_size,
+            'extension': file_ext,
+            'uploaded_at': datetime.now().isoformat()
+        }
+        
+        # For text files, store content directly
+        if file_ext in ['txt', 'csv', 'json', 'xml', 'html', 'css', 'js', 'py', 'java', 'cpp', 'c', 'h', 'md', 'yaml', 'yml']:
+            try:
+                file_data['content'] = file_content.decode('utf-8')
+                file_data['description'] = f"Text file with {len(file_data['content'])} characters"
+            except:
+                file_data['content'] = base64.b64encode(file_content).decode('utf-8')
+                file_data['description'] = f"Binary file ({file_size} bytes)"
+        
+        # For images, store as base64
+        elif file_ext in ['png', 'jpg', 'jpeg', 'gif', 'bmp']:
+            file_data['content'] = base64.b64encode(file_content).decode('utf-8')
+            file_data['description'] = f"Image file ({file_ext.upper()}, {file_size} bytes)"
+        
+        # For other files, store metadata only
+        else:
+            file_data['content'] = base64.b64encode(file_content).decode('utf-8')
+            file_data['description'] = f"Document file ({file_ext.upper()}, {file_size} bytes)"
+        
+        return file_data
+        
+    except Exception as e:
+        print(f"Error processing file upload: {str(e)}")
+        return {'error': str(e)}
+
+# HTML Template with embedded CSS and JavaScript
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Jack AI Beta - Next Generation Intelligence</title>
-    <link href="https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@200;300;400;500;600;700;800;900&family=Inter:wght@100;200;300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jack's AI - Advanced AI Assistant</title>
+    
+    <!-- Modern CSS Styles for Beautiful UI -->
     <style>
+        /* CSS Variables for easy theme customization */
         :root {
-            --primary: #6366f1;
+            --primary-color: #6366f1;
             --primary-dark: #4f46e5;
             --primary-light: #818cf8;
-            --secondary: #ec4899;
-            --accent: #14b8a6;
-            --success: #10b981;
-            --warning: #f59e0b;
-            --danger: #ef4444;
-            --dark: #0f172a;
-            --dark-lighter: #1e293b;
-            --dark-card: #1a2332;
-            --light: #f8fafc;
+            --secondary-color: #10b981;
+            --danger-color: #ef4444;
+            --warning-color: #f59e0b;
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-tertiary: #334155;
             --text-primary: #f1f5f9;
-            --text-secondary: #94a3b8;
-            --text-muted: #64748b;
-            --border: rgba(148, 163, 184, 0.1);
-            --glow: rgba(99, 102, 241, 0.5);
+            --text-secondary: #cbd5e1;
+            --text-muted: #94a3b8;
+            --border-color: #475569;
             --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-            --shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-            --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.25);
-            --shadow-xl: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
             --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             --gradient-secondary: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-            --gradient-accent: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-            --gradient-dark: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
-            --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
-            --transition-base: 250ms cubic-bezier(0.4, 0, 0.2, 1);
-            --transition-slow: 350ms cubic-bezier(0.4, 0, 0.2, 1);
-            --blur-sm: 4px;
-            --blur-base: 8px;
-            --blur-lg: 16px;
-            --blur-xl: 24px;
+            --gradient-success: linear-gradient(135deg, #13f1fc 0%, #0470dc 100%);
         }
-
+        
+        /* Global Styles */
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
         }
-
+        
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-            background: var(--dark);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--bg-primary);
             color: var(--text-primary);
-            overflow: hidden;
-            height: 100vh;
-            position: relative;
+            line-height: 1.6;
+            min-height: 100vh;
+            overflow-x: hidden;
         }
-
-        .background-effects {
+        
+        /* Animated Background */
+        .background-animation {
             position: fixed;
-            inset: 0;
-            z-index: 0;
-            overflow: hidden;
-            pointer-events: none;
-        }
-
-        .gradient-orb {
-            position: absolute;
-            border-radius: 50%;
-            filter: blur(100px);
-            opacity: 0.5;
-            animation: float 20s infinite ease-in-out;
-        }
-
-        .gradient-orb:nth-child(1) {
-            width: 600px;
-            height: 600px;
-            background: radial-gradient(circle, var(--primary) 0%, transparent 70%);
-            top: -200px;
-            left: -200px;
-            animation-duration: 25s;
-        }
-
-        .gradient-orb:nth-child(2) {
-            width: 500px;
-            height: 500px;
-            background: radial-gradient(circle, var(--secondary) 0%, transparent 70%);
-            bottom: -150px;
-            right: -150px;
-            animation-duration: 30s;
-            animation-delay: 5s;
-        }
-
-        .gradient-orb:nth-child(3) {
-            width: 400px;
-            height: 400px;
-            background: radial-gradient(circle, var(--accent) 0%, transparent 70%);
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            animation-duration: 35s;
-            animation-delay: 10s;
-        }
-
-        @keyframes float {
-            0%, 100% { transform: translate(0, 0) scale(1); }
-            25% { transform: translate(50px, -50px) scale(1.1); }
-            50% { transform: translate(-30px, 30px) scale(0.9); }
-            75% { transform: translate(-50px, -30px) scale(1.05); }
-        }
-
-        .grid-overlay {
-            position: absolute;
-            inset: 0;
-            background-image: 
-                linear-gradient(rgba(99, 102, 241, 0.03) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(99, 102, 241, 0.03) 1px, transparent 1px);
-            background-size: 50px 50px;
-            animation: grid-move 10s linear infinite;
-        }
-
-        @keyframes grid-move {
-            0% { transform: translate(0, 0); }
-            100% { transform: translate(50px, 50px); }
-        }
-
-        .app-container {
-            position: relative;
+            top: 0;
+            left: 0;
             width: 100%;
-            height: 100vh;
-            display: flex;
+            height: 100%;
+            z-index: -1;
+            background: linear-gradient(45deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
+            overflow: hidden;
+        }
+        
+        .background-animation::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(99, 102, 241, 0.1) 0%, transparent 70%);
+            animation: rotate 30s linear infinite;
+        }
+        
+        @keyframes rotate {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Container */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 1rem;
+            position: relative;
             z-index: 1;
         }
-
-        .sidebar {
-            width: 280px;
-            background: rgba(26, 35, 50, 0.6);
-            backdrop-filter: blur(var(--blur-xl));
-            border-right: 1px solid var(--border);
-            display: flex;
-            flex-direction: column;
-            transition: transform var(--transition-base);
-            z-index: 20;
-        }
-
-        .sidebar-header {
+        
+        /* Header */
+        .header {
+            background: var(--bg-secondary);
+            border-radius: 1rem;
             padding: 1.5rem;
-            border-bottom: 1px solid var(--border);
-            background: linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(236, 72, 153, 0.1) 100%);
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow-xl);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border-color);
+            animation: slideDown 0.5s ease-out;
         }
-
-        .logo-container {
+        
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .header-content {
             display: flex;
+            justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
             gap: 1rem;
         }
-
-        .logo-icon {
-            width: 48px;
-            height: 48px;
-            background: var(--gradient-primary);
-            border-radius: 14px;
+        
+        .logo {
             display: flex;
             align-items: center;
-            justify-content: center;
-            box-shadow: 0 0 30px rgba(99, 102, 241, 0.5);
-            animation: pulse-glow 2s infinite;
-        }
-
-        @keyframes pulse-glow {
-            0%, 100% { box-shadow: 0 0 30px rgba(99, 102, 241, 0.5); }
-            50% { box-shadow: 0 0 50px rgba(99, 102, 241, 0.8); }
-        }
-
-        .logo-icon svg {
-            width: 28px;
-            height: 28px;
-            fill: white;
-        }
-
-        .logo-text h1 {
-            font-size: 1.25rem;
-            font-weight: 700;
+            gap: 0.75rem;
+            font-size: 1.5rem;
+            font-weight: bold;
             background: var(--gradient-primary);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            margin-bottom: 0.25rem;
+            animation: pulse 2s ease-in-out infinite;
         }
-
-        .logo-text p {
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            font-weight: 500;
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.8; }
         }
-
-        .new-chat-btn {
-            margin: 1rem;
-            padding: 0.875rem;
+        
+        .logo-icon {
+            width: 40px;
+            height: 40px;
             background: var(--gradient-primary);
-            border: none;
-            border-radius: 12px;
-            color: white;
-            font-weight: 600;
-            font-size: 0.875rem;
-            cursor: pointer;
-            transition: all var(--transition-base);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .new-chat-btn::before {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 0;
-            height: 0;
-            background: rgba(255, 255, 255, 0.2);
             border-radius: 50%;
-            transform: translate(-50%, -50%);
-            transition: width var(--transition-slow), height var(--transition-slow);
-        }
-
-        .new-chat-btn:hover::before {
-            width: 300px;
-            height: 300px;
-        }
-
-        .new-chat-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 30px rgba(99, 102, 241, 0.3);
-        }
-
-        .chat-history {
-            flex: 1;
-            overflow-y: auto;
-            padding: 1rem;
-        }
-
-        .chat-history::-webkit-scrollbar {
-            width: 4px;
-        }
-
-        .chat-history::-webkit-scrollbar-track {
-            background: transparent;
-        }
-
-        .chat-history::-webkit-scrollbar-thumb {
-            background: var(--text-muted);
-            border-radius: 2px;
-        }
-
-        .history-item {
-            padding: 0.75rem;
-            margin-bottom: 0.5rem;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all var(--transition-fast);
-            border: 1px solid transparent;
-        }
-
-        .history-item:hover {
-            background: rgba(99, 102, 241, 0.1);
-            border-color: var(--primary);
-        }
-
-        .history-item-title {
-            font-size: 0.875rem;
-            font-weight: 500;
-            margin-bottom: 0.25rem;
-            color: var(--text-primary);
-        }
-
-        .history-item-preview {
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .sidebar-footer {
-            padding: 1rem;
-            border-top: 1px solid var(--border);
-            background: rgba(15, 23, 42, 0.5);
-        }
-
-        .settings-btn {
-            width: 100%;
-            padding: 0.75rem;
-            background: transparent;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text-secondary);
-            font-size: 0.875rem;
-            cursor: pointer;
-            transition: all var(--transition-fast);
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 0.5rem;
+            font-size: 1.5rem;
+            color: white;
+            box-shadow: var(--shadow-lg);
         }
-
-        .settings-btn:hover {
-            background: rgba(99, 102, 241, 0.1);
-            border-color: var(--primary);
-            color: var(--primary);
+        
+        .header-info {
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+            flex-wrap: wrap;
         }
-
-        .main-content {
-            flex: 1;
+        
+        .status-badge {
+            background: var(--gradient-success);
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 2rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+            box-shadow: var(--shadow-md);
+            animation: shimmer 2s ease-in-out infinite;
+        }
+        
+        @keyframes shimmer {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.9; }
+        }
+        
+        .beta-notice {
+            background: var(--warning-color);
+            color: var(--bg-primary);
+            padding: 0.5rem 1rem;
+            border-radius: 2rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+            animation: bounce 2s ease-in-out infinite;
+        }
+        
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-2px); }
+        }
+        
+        /* Main Chat Container */
+        .chat-container {
+            background: var(--bg-secondary);
+            border-radius: 1rem;
+            box-shadow: var(--shadow-xl);
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+            animation: fadeIn 0.5s ease-out;
+            min-height: 600px;
             display: flex;
             flex-direction: column;
+        }
+        
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: scale(0.95);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+        
+        /* Token Usage Bar */
+        .token-bar-container {
+            padding: 1rem;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .token-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+            font-size: 0.875rem;
+        }
+        
+        .token-label {
+            color: var(--text-secondary);
+        }
+        
+        .token-count {
+            font-weight: 600;
+            color: var(--primary-light);
+        }
+        
+        .token-bar {
+            width: 100%;
+            height: 8px;
+            background: var(--bg-primary);
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .token-progress {
+            height: 100%;
+            background: var(--gradient-primary);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            box-shadow: 0 0 10px rgba(99, 102, 241, 0.5);
             position: relative;
             overflow: hidden;
         }
-
-        .chat-header {
-            padding: 1rem 2rem;
-            background: rgba(26, 35, 50, 0.4);
-            backdrop-filter: blur(var(--blur-lg));
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-
-        .chat-info {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-        }
-
-        .status-badge {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.5rem 1rem;
-            background: rgba(16, 185, 129, 0.1);
-            border: 1px solid rgba(16, 185, 129, 0.3);
-            border-radius: 100px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            color: var(--success);
-        }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            background: var(--success);
-            border-radius: 50%;
-            animation: blink 2s infinite;
-        }
-
-        @keyframes blink {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.3; }
-        }
-
-        .header-actions {
-            display: flex;
-            gap: 0.5rem;
-        }
-
-        .header-btn {
-            width: 36px;
-            height: 36px;
-            background: rgba(99, 102, 241, 0.1);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text-secondary);
-            cursor: pointer;
-            transition: all var(--transition-fast);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            position: relative;
-        }
-
-        .header-btn:hover {
-            background: var(--primary);
-            color: white;
-            transform: scale(1.05);
-            box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
-        }
-
-        .tooltip {
+        
+        .token-progress::after {
+            content: '';
             position: absolute;
-            bottom: -35px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: var(--dark-card);
+            top: 0;
+            left: 0;
+            bottom: 0;
+            right: 0;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+            animation: shimmerBar 2s infinite;
+        }
+        
+        @keyframes shimmerBar {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        /* Chat Actions Bar */
+        .chat-actions {
+            padding: 1rem;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        
+        .action-button {
+            padding: 0.5rem 1rem;
+            background: var(--bg-secondary);
             color: var(--text-primary);
-            padding: 0.5rem 0.75rem;
-            border-radius: 6px;
-            font-size: 0.75rem;
-            white-space: nowrap;
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity var(--transition-fast);
-            z-index: 100;
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
         }
-
-        .header-btn:hover .tooltip {
-            opacity: 1;
+        
+        .action-button:hover {
+            background: var(--primary-color);
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
         }
-
+        
+        .action-button.danger {
+            border-color: var(--danger-color);
+            color: var(--danger-color);
+        }
+        
+        .action-button.danger:hover {
+            background: var(--danger-color);
+            color: white;
+        }
+        
+        .action-button.success {
+            border-color: var(--secondary-color);
+            color: var(--secondary-color);
+        }
+        
+        .action-button.success:hover {
+            background: var(--secondary-color);
+            color: white;
+        }
+        
+        /* Messages Area */
         .messages-container {
             flex: 1;
             overflow-y: auto;
             padding: 2rem;
-            scroll-behavior: smooth;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            min-height: 400px;
+            max-height: 600px;
         }
-
-        .messages-container::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        .messages-container::-webkit-scrollbar-track {
-            background: transparent;
-        }
-
-        .messages-container::-webkit-scrollbar-thumb {
-            background: var(--text-muted);
-            border-radius: 3px;
-        }
-
+        
         .message {
             display: flex;
             gap: 1rem;
-            margin-bottom: 1.5rem;
-            animation: message-appear 0.3s ease-out;
+            animation: messageSlide 0.3s ease-out;
+            max-width: 100%;
         }
-
-        @keyframes message-appear {
+        
+        @keyframes messageSlide {
             from {
                 opacity: 0;
                 transform: translateY(10px);
@@ -480,439 +830,648 @@ HTML_TEMPLATE = """
                 transform: translateY(0);
             }
         }
-
+        
         .message.user {
-            flex-direction: row-reverse;
+            justify-content: flex-end;
         }
-
+        
         .message-avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 12px;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
+            font-weight: bold;
+            font-size: 0.875rem;
             flex-shrink: 0;
+        }
+        
+        .user .message-avatar {
+            background: var(--gradient-primary);
+            color: white;
+            order: 2;
+        }
+        
+        .assistant .message-avatar {
+            background: var(--gradient-secondary);
+            color: white;
+        }
+        
+        .message-content {
+            background: var(--bg-tertiary);
+            padding: 1rem;
+            border-radius: 1rem;
+            max-width: 70%;
+            word-wrap: break-word;
+            box-shadow: var(--shadow-md);
             position: relative;
         }
-
-        .message.user .message-avatar {
-            background: var(--gradient-primary);
-            box-shadow: 0 0 20px rgba(99, 102, 241, 0.3);
+        
+        .user .message-content {
+            background: var(--primary-color);
+            color: white;
+            border-bottom-right-radius: 0.25rem;
         }
-
-        .message.assistant .message-avatar {
-            background: var(--gradient-secondary);
-            box-shadow: 0 0 20px rgba(236, 72, 153, 0.3);
+        
+        .assistant .message-content {
+            background: var(--bg-tertiary);
+            border-bottom-left-radius: 0.25rem;
         }
-
-        .message-avatar::after {
-            content: '';
-            position: absolute;
-            inset: -2px;
-            border-radius: 12px;
-            padding: 2px;
-            background: var(--gradient-primary);
-            -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-            -webkit-mask-composite: xor;
-            mask-composite: exclude;
-            opacity: 0;
-            transition: opacity var(--transition-base);
+        
+        .message-content pre {
+            background: var(--bg-primary);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            overflow-x: auto;
+            margin: 0.5rem 0;
         }
-
-        .message:hover .message-avatar::after {
-            opacity: 1;
-        }
-
-        .message-content {
-            max-width: 70%;
-        }
-
-        .message-meta {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            margin-bottom: 0.5rem;
-            padding: 0 0.5rem;
-        }
-
-        .message-author {
+        
+        .message-content code {
+            background: var(--bg-primary);
+            padding: 0.2rem 0.4rem;
+            border-radius: 0.25rem;
             font-size: 0.875rem;
-            font-weight: 600;
-            color: var(--text-primary);
         }
-
-        .message-time {
+        
+        .message-timestamp {
             font-size: 0.75rem;
             color: var(--text-muted);
-        }
-
-        .message-bubble {
-            padding: 1rem 1.25rem;
-            border-radius: 18px;
-            position: relative;
-            line-height: 1.6;
-            word-wrap: break-word;
-            white-space: pre-wrap;
-        }
-
-        .message.user .message-bubble {
-            background: var(--gradient-primary);
-            color: white;
-            border-bottom-right-radius: 4px;
-            box-shadow: 0 4px 20px rgba(99, 102, 241, 0.2);
-        }
-
-        .message.assistant .message-bubble {
-            background: rgba(26, 35, 50, 0.8);
-            backdrop-filter: blur(var(--blur-base));
-            border: 1px solid var(--border);
-            color: var(--text-primary);
-            border-bottom-left-radius: 4px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-        }
-
-        .message-actions {
-            display: flex;
-            gap: 0.25rem;
             margin-top: 0.5rem;
-            padding: 0 0.5rem;
-            opacity: 0;
-            transition: opacity var(--transition-fast);
         }
-
-        .message:hover .message-actions {
-            opacity: 1;
+        
+        .message-files {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+            flex-wrap: wrap;
         }
-
-        .message-action {
+        
+        .file-tag {
+            background: var(--bg-primary);
             padding: 0.25rem 0.5rem;
-            background: rgba(99, 102, 241, 0.1);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            color: var(--text-secondary);
+            border-radius: 0.25rem;
             font-size: 0.75rem;
-            cursor: pointer;
-            transition: all var(--transition-fast);
+            color: var(--text-secondary);
             display: flex;
             align-items: center;
             gap: 0.25rem;
         }
-
-        .message-action:hover {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-
+        
+        /* Typing Indicator */
         .typing-indicator {
             display: none;
             align-items: center;
             gap: 0.5rem;
             padding: 1rem;
-            margin-bottom: 1rem;
         }
-
+        
         .typing-indicator.active {
             display: flex;
-            animation: fade-in 0.3s ease-out;
         }
-
-        @keyframes fade-in {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-
+        
         .typing-dots {
             display: flex;
-            gap: 4px;
-            padding: 0.75rem 1rem;
-            background: rgba(26, 35, 50, 0.8);
-            backdrop-filter: blur(var(--blur-base));
-            border: 1px solid var(--border);
-            border-radius: 18px;
+            gap: 0.25rem;
         }
-
+        
         .typing-dot {
             width: 8px;
             height: 8px;
-            background: var(--primary);
+            background: var(--primary-light);
             border-radius: 50%;
-            animation: typing 1.4s infinite;
+            animation: typingAnimation 1.4s infinite ease-in-out;
         }
-
+        
+        .typing-dot:nth-child(1) {
+            animation-delay: -0.32s;
+        }
+        
         .typing-dot:nth-child(2) {
-            animation-delay: 0.2s;
+            animation-delay: -0.16s;
         }
-
-        .typing-dot:nth-child(3) {
-            animation-delay: 0.4s;
-        }
-
-        @keyframes typing {
-            0%, 60%, 100% {
-                transform: translateY(0);
+        
+        @keyframes typingAnimation {
+            0%, 80%, 100% {
+                transform: scale(1);
                 opacity: 0.5;
             }
-            30% {
-                transform: translateY(-10px);
+            40% {
+                transform: scale(1.3);
                 opacity: 1;
             }
         }
-
+        
+        /* Input Area */
         .input-container {
-            padding: 1.5rem 2rem;
-            background: rgba(26, 35, 50, 0.6);
-            backdrop-filter: blur(var(--blur-xl));
-            border-top: 1px solid var(--border);
+            padding: 1.5rem;
+            background: var(--bg-tertiary);
+            border-top: 1px solid var(--border-color);
         }
-
+        
         .input-wrapper {
             display: flex;
             gap: 1rem;
             align-items: flex-end;
         }
-
-        .input-field {
+        
+        .input-group {
             flex: 1;
-            position: relative;
-        }
-
-        .input-box {
-            width: 100%;
-            min-height: 48px;
-            max-height: 120px;
-            padding: 0.75rem 3rem 0.75rem 1rem;
-            background: rgba(15, 23, 42, 0.5);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            color: var(--text-primary);
-            font-size: 0.875rem;
-            font-family: inherit;
-            resize: none;
-            transition: all var(--transition-fast);
-            line-height: 1.5;
-        }
-
-        .input-box:focus {
-            outline: none;
-            border-color: var(--primary);
-            background: rgba(15, 23, 42, 0.8);
-            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
-        }
-
-        .input-box::placeholder {
-            color: var(--text-muted);
-        }
-
-        .input-tools {
-            position: absolute;
-            right: 0.5rem;
-            top: 50%;
-            transform: translateY(-50%);
             display: flex;
-            gap: 0.25rem;
-        }
-
-        .input-tool {
-            width: 32px;
-            height: 32px;
-            background: transparent;
-            border: none;
-            border-radius: 6px;
-            color: var(--text-muted);
-            cursor: pointer;
-            transition: all var(--transition-fast);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .input-tool:hover {
-            background: rgba(99, 102, 241, 0.1);
-            color: var(--primary);
-        }
-
-        .send-btn {
-            padding: 0.75rem 1.5rem;
-            background: var(--gradient-primary);
-            border: none;
-            border-radius: 12px;
-            color: white;
-            font-weight: 600;
-            font-size: 0.875rem;
-            cursor: pointer;
-            transition: all var(--transition-base);
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .send-btn::before {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 0;
-            height: 0;
-            background: rgba(255, 255, 255, 0.2);
-            border-radius: 50%;
-            transform: translate(-50%, -50%);
-            transition: width var(--transition-slow), height var(--transition-slow);
-        }
-
-        .send-btn:hover::before {
-            width: 200px;
-            height: 200px;
-        }
-
-        .send-btn:hover {
-            transform: scale(1.05);
-            box-shadow: 0 10px 30px rgba(99, 102, 241, 0.3);
-        }
-
-        .send-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-        }
-
-        .quick-actions {
-            display: flex;
-            gap: 0.5rem;
-            margin-top: 1rem;
-            flex-wrap: wrap;
-        }
-
-        .quick-action {
-            padding: 0.5rem 1rem;
-            background: rgba(99, 102, 241, 0.1);
-            border: 1px solid var(--border);
-            border-radius: 100px;
-            color: var(--text-secondary);
-            font-size: 0.75rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all var(--transition-fast);
-            display: flex;
-            align-items: center;
+            flex-direction: column;
             gap: 0.5rem;
         }
-
-        .quick-action:hover {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-
-        .mobile-menu-btn {
-            display: none;
-            position: fixed;
-            top: 1rem;
-            left: 1rem;
-            width: 48px;
-            height: 48px;
-            background: rgba(26, 35, 50, 0.8);
-            backdrop-filter: blur(var(--blur-base));
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            color: var(--text-primary);
-            cursor: pointer;
-            z-index: 30;
-            align-items: center;
-            justify-content: center;
-            transition: all var(--transition-fast);
-        }
-
-        .mobile-menu-btn:hover {
-            background: var(--primary);
-            color: white;
-        }
-
+        
         .file-upload-area {
             display: none;
             padding: 1rem;
-            margin-bottom: 1rem;
-            background: rgba(99, 102, 241, 0.05);
-            border: 2px dashed var(--primary);
-            border-radius: 12px;
+            background: var(--bg-secondary);
+            border: 2px dashed var(--border-color);
+            border-radius: 0.5rem;
             text-align: center;
-            transition: all var(--transition-fast);
+            cursor: pointer;
+            transition: all 0.3s ease;
         }
-
+        
         .file-upload-area.active {
             display: block;
-            animation: slide-down 0.3s ease-out;
         }
-
-        @keyframes slide-down {
+        
+        .file-upload-area:hover {
+            border-color: var(--primary-color);
+            background: rgba(99, 102, 241, 0.1);
+        }
+        
+        .file-upload-area.dragover {
+            border-color: var(--primary-light);
+            background: rgba(99, 102, 241, 0.2);
+        }
+        
+        .file-list {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            margin-top: 0.5rem;
+        }
+        
+        .file-item {
+            background: var(--bg-secondary);
+            padding: 0.5rem;
+            border-radius: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+            border: 1px solid var(--border-color);
+        }
+        
+        .file-remove {
+            cursor: pointer;
+            color: var(--danger-color);
+            font-weight: bold;
+        }
+        
+        .file-remove:hover {
+            color: var(--text-primary);
+        }
+        
+        .message-input {
+            width: 100%;
+            padding: 1rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            color: var(--text-primary);
+            font-size: 1rem;
+            resize: vertical;
+            min-height: 50px;
+            max-height: 200px;
+            transition: all 0.3s ease;
+        }
+        
+        .message-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        }
+        
+        .input-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .icon-button {
+            padding: 0.75rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .icon-button:hover {
+            background: var(--primary-color);
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .send-button {
+            padding: 0.75rem 1.5rem;
+            background: var(--gradient-primary);
+            color: white;
+            border: none;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .send-button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .send-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        /* Prompt Improvement Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(5px);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+            animation: fadeIn 0.3s ease-out;
+        }
+        
+        .modal.active {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: var(--bg-secondary);
+            border-radius: 1rem;
+            padding: 2rem;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: var(--shadow-xl);
+            border: 1px solid var(--border-color);
+            animation: slideUp 0.3s ease-out;
+        }
+        
+        @keyframes slideUp {
             from {
                 opacity: 0;
-                max-height: 0;
+                transform: translateY(20px);
             }
             to {
                 opacity: 1;
-                max-height: 200px;
+                transform: translateY(0);
             }
         }
-
-        .file-upload-area.drag-over {
-            background: rgba(99, 102, 241, 0.1);
-            border-color: var(--primary);
+        
+        .modal-header {
+            margin-bottom: 1.5rem;
         }
-
-        .file-list {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.5rem;
-            margin-top: 1rem;
-        }
-
-        .file-item {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.5rem 1rem;
-            background: rgba(99, 102, 241, 0.1);
-            border: 1px solid var(--primary);
-            border-radius: 8px;
-            font-size: 0.75rem;
-            color: var(--primary);
-        }
-
-        .file-remove {
-            cursor: pointer;
-            opacity: 0.7;
-            transition: opacity var(--transition-fast);
-        }
-
-        .file-remove:hover {
-            opacity: 1;
-        }
-
-        .notification {
-            position: fixed;
-            top: 2rem;
-            right: 2rem;
-            padding: 1rem 1.5rem;
-            background: var(--dark-card);
-            backdrop-filter: blur(var(--blur-lg));
-            border: 1px solid var(--border);
-            border-radius: 12px;
+        
+        .modal-title {
+            font-size: 1.5rem;
+            font-weight: bold;
             color: var(--text-primary);
+            margin-bottom: 0.5rem;
+        }
+        
+        .modal-subtitle {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+        
+        .prompt-comparison {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        
+        .prompt-option {
+            padding: 1rem;
+            background: var(--bg-tertiary);
+            border: 2px solid var(--border-color);
+            border-radius: 0.5rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .prompt-option:hover {
+            border-color: var(--primary-color);
+            transform: translateX(5px);
+        }
+        
+        .prompt-option.selected {
+            border-color: var(--primary-light);
+            background: rgba(99, 102, 241, 0.1);
+        }
+        
+        .prompt-label {
+            font-weight: 600;
+            color: var(--primary-light);
+            margin-bottom: 0.5rem;
+            font-size: 0.875rem;
+        }
+        
+        .prompt-text {
+            color: var(--text-primary);
+            line-height: 1.5;
+        }
+        
+        .modal-actions {
+            display: flex;
+            gap: 1rem;
+            margin-top: 1.5rem;
+            justify-content: flex-end;
+        }
+        
+        .modal-button {
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: none;
+        }
+        
+        .modal-button.primary {
+            background: var(--gradient-primary);
+            color: white;
+        }
+        
+        .modal-button.primary:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .modal-button.secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+        
+        .modal-button.secondary:hover {
+            background: var(--bg-primary);
+        }
+        
+        /* Welcome Screen */
+        .welcome-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 3rem;
+            text-align: center;
+            animation: fadeIn 0.5s ease-out;
+        }
+        
+        .welcome-title {
+            font-size: 2.5rem;
+            font-weight: bold;
+            background: var(--gradient-primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 1rem;
+        }
+        
+        .welcome-subtitle {
+            font-size: 1.25rem;
+            color: var(--text-secondary);
+            margin-bottom: 2rem;
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+            width: 100%;
+            max-width: 800px;
+        }
+        
+        .feature-card {
+            background: var(--bg-tertiary);
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            border: 1px solid var(--border-color);
+            transition: all 0.3s ease;
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-5px);
             box-shadow: var(--shadow-xl);
-            z-index: 1000;
+            border-color: var(--primary-color);
+        }
+        
+        .feature-icon {
+            font-size: 2rem;
+            margin-bottom: 0.75rem;
+        }
+        
+        .feature-title {
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+        }
+        
+        .feature-description {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+        
+        /* Loading Spinner */
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border-color);
+            border-top: 3px solid var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .container {
+                padding: 0.5rem;
+            }
+            
+            .header {
+                padding: 1rem;
+            }
+            
+            .header-content {
+                flex-direction: column;
+                text-align: center;
+            }
+            
+            .header-info {
+                flex-direction: column;
+                gap: 0.5rem;
+            }
+            
+            .message-content {
+                max-width: 85%;
+            }
+            
+            .input-wrapper {
+                flex-direction: column;
+            }
+            
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .welcome-title {
+                font-size: 2rem;
+            }
+            
+            .welcome-subtitle {
+                font-size: 1rem;
+            }
+            
+            .modal-content {
+                padding: 1.5rem;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .message-content {
+                max-width: 90%;
+            }
+            
+            .logo {
+                font-size: 1.25rem;
+            }
+            
+            .logo-icon {
+                width: 32px;
+                height: 32px;
+            }
+            
+            .action-button {
+                padding: 0.4rem 0.8rem;
+                font-size: 0.75rem;
+            }
+            
+            .welcome-title {
+                font-size: 1.5rem;
+            }
+        }
+        
+        /* Print Styles */
+        @media print {
+            body {
+                background: white;
+                color: black;
+            }
+            
+            .header, .input-container, .chat-actions, .token-bar-container {
+                display: none;
+            }
+            
+            .messages-container {
+                max-height: none;
+            }
+            
+            .message-content {
+                box-shadow: none;
+                border: 1px solid #ddd;
+            }
+        }
+        
+        /* Accessibility */
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border-width: 0;
+        }
+        
+        /* Focus Styles */
+        button:focus-visible,
+        input:focus-visible,
+        textarea:focus-visible {
+            outline: 2px solid var(--primary-light);
+            outline-offset: 2px;
+        }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: var(--bg-primary);
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--border-color);
+        }
+        
+        /* Toast Notifications */
+        .toast-container {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        
+        .toast {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            padding: 1rem;
+            border-radius: 0.5rem;
+            box-shadow: var(--shadow-xl);
             display: flex;
             align-items: center;
-            gap: 1rem;
-            animation: slide-in 0.3s ease-out;
+            gap: 0.75rem;
+            min-width: 300px;
+            animation: slideInRight 0.3s ease-out;
         }
-
-        @keyframes slide-in {
+        
+        @keyframes slideInRight {
             from {
                 opacity: 0;
                 transform: translateX(100%);
@@ -922,788 +1481,1105 @@ HTML_TEMPLATE = """
                 transform: translateX(0);
             }
         }
-
-        .notification.success {
-            border-color: var(--success);
-            background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(16, 185, 129, 0.05) 100%);
+        
+        .toast.success {
+            border-color: var(--secondary-color);
         }
-
-        .notification.error {
-            border-color: var(--danger);
-            background: linear-gradient(135deg, rgba(239, 68, 68, 0.1) 0%, rgba(239, 68, 68, 0.05) 100%);
+        
+        .toast.error {
+            border-color: var(--danger-color);
         }
-
-        .notification-close {
-            margin-left: auto;
+        
+        .toast.warning {
+            border-color: var(--warning-color);
+        }
+        
+        .toast-icon {
+            font-size: 1.25rem;
+        }
+        
+        .toast.success .toast-icon {
+            color: var(--secondary-color);
+        }
+        
+        .toast.error .toast-icon {
+            color: var(--danger-color);
+        }
+        
+        .toast.warning .toast-icon {
+            color: var(--warning-color);
+        }
+        
+        .toast-message {
+            flex: 1;
+            color: var(--text-primary);
+        }
+        
+        .toast-close {
             cursor: pointer;
-            opacity: 0.7;
-            transition: opacity var(--transition-fast);
+            color: var(--text-muted);
+            font-size: 1.25rem;
         }
-
-        .notification-close:hover {
-            opacity: 1;
-        }
-
-        @media (max-width: 768px) {
-            .sidebar {
-                position: fixed;
-                left: 0;
-                top: 0;
-                bottom: 0;
-                transform: translateX(-100%);
-                width: 280px;
-                z-index: 40;
-            }
-
-            .sidebar.open {
-                transform: translateX(0);
-            }
-
-            .mobile-menu-btn {
-                display: flex;
-            }
-
-            .main-content {
-                margin-left: 0;
-            }
-
-            .chat-header {
-                padding-left: 4rem;
-            }
-
-            .messages-container {
-                padding: 1rem;
-            }
-
-            .message-content {
-                max-width: 85%;
-            }
-        }
-
-        @media (max-width: 480px) {
-            .logo-text h1 {
-                font-size: 1rem;
-            }
-
-            .chat-info {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 0.5rem;
-            }
-
-            .header-actions {
-                position: absolute;
-                top: 1rem;
-                right: 1rem;
-            }
-
-            .message-bubble {
-                font-size: 0.875rem;
-                padding: 0.875rem 1rem;
-            }
-
-            .input-container {
-                padding: 1rem;
-            }
-
-            .send-btn span {
-                display: none;
-            }
-
-            .send-btn {
-                padding: 0.75rem;
-            }
-        }
-
-        @media (prefers-reduced-motion: reduce) {
-            * {
-                animation: none !important;
-                transition: none !important;
-            }
-        }
-
-        .loading-spinner {
-            display: inline-block;
-            width: 16px;
-            height: 16px;
-            border: 2px solid rgba(255, 255, 255, 0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
+        
+        .toast-close:hover {
+            color: var(--text-primary);
         }
     </style>
 </head>
 <body>
-    <div class="background-effects">
-        <div class="gradient-orb"></div>
-        <div class="gradient-orb"></div>
-        <div class="gradient-orb"></div>
-        <div class="grid-overlay"></div>
-    </div>
-
-    <div class="app-container">
-        <button class="mobile-menu-btn" onclick="toggleSidebar()">
-            <i class="fas fa-bars"></i>
-        </button>
-
-        <aside class="sidebar" id="sidebar">
-            <div class="sidebar-header">
-                <div class="logo-container">
-                    <div class="logo-icon">
-                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                            <path d="M2 17L12 22L22 17" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                            <path d="M2 12L12 17L22 12" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                    </div>
-                    <div class="logo-text">
-                        <h1>Jack AI Beta</h1>
-                        <p>Next-Gen Intelligence</p>
-                    </div>
+    <!-- Animated Background -->
+    <div class="background-animation"></div>
+    
+    <!-- Main Container -->
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo">
+                    <div class="logo-icon">🤖</div>
+                    <span>Jack's AI</span>
+                </div>
+                <div class="header-info">
+                    <span class="status-badge">🟢 Online</span>
+                    <span class="beta-notice">🎉 Temporarily Free!</span>
                 </div>
             </div>
-
-            <button class="new-chat-btn" onclick="newChat()">
-                <i class="fas fa-plus"></i> New Chat
-            </button>
-
-            <div class="chat-history" id="chatHistory">
-                <div class="history-item">
-                    <div class="history-item-title">Welcome to Jack AI</div>
-                    <div class="history-item-preview">Start your conversation...</div>
+        </header>
+        
+        <!-- Main Chat Container -->
+        <main class="chat-container">
+            <!-- Token Usage Bar -->
+            <div class="token-bar-container">
+                <div class="token-info">
+                    <span class="token-label">Context Window Usage</span>
+                    <span class="token-count">
+                        <span id="currentTokens">0</span> / <span id="maxTokens">125,000</span> tokens
+                    </span>
+                </div>
+                <div class="token-bar">
+                    <div class="token-progress" id="tokenProgress" style="width: 0%"></div>
                 </div>
             </div>
-
-            <div class="sidebar-footer">
-                <button class="settings-btn" onclick="openSettings()">
-                    <i class="fas fa-cog"></i> Settings
+            
+            <!-- Chat Actions Bar -->
+            <div class="chat-actions">
+                <button class="action-button" onclick="startNewChat()">
+                    <span>🆕</span>
+                    <span>New Chat</span>
+                </button>
+                <button class="action-button success" onclick="compactConversation()">
+                    <span>📦</span>
+                    <span>Compact</span>
+                </button>
+                <button class="action-button" onclick="exportChat()">
+                    <span>💾</span>
+                    <span>Export</span>
+                </button>
+                <button class="action-button danger" onclick="clearChat()">
+                    <span>🗑️</span>
+                    <span>Clear</span>
                 </button>
             </div>
-        </aside>
-
-        <main class="main-content">
-            <header class="chat-header">
-                <div class="chat-info">
-                    <div class="status-badge">
-                        <span class="status-dot"></span>
-                        <span>Online</span>
-                    </div>
-                </div>
-
-                <div class="header-actions">
-                    <button class="header-btn" onclick="clearChat()">
-                        <i class="fas fa-trash"></i>
-                        <span class="tooltip">Clear Chat</span>
-                    </button>
-                    <button class="header-btn" onclick="exportChat()">
-                        <i class="fas fa-download"></i>
-                        <span class="tooltip">Export</span>
-                    </button>
-                    <button class="header-btn" onclick="toggleTheme()">
-                        <i class="fas fa-moon"></i>
-                        <span class="tooltip">Theme</span>
-                    </button>
-                </div>
-            </header>
-
+            
+            <!-- Messages Container -->
             <div class="messages-container" id="messagesContainer">
-                <div class="message assistant">
-                    <div class="message-avatar">
-                        <i class="fas fa-robot"></i>
-                    </div>
-                    <div class="message-content">
-                        <div class="message-meta">
-                            <span class="message-author">Jack AI</span>
-                            <span class="message-time">Now</span>
+                <!-- Welcome Screen -->
+                <div class="welcome-screen" id="welcomeScreen">
+                    <h1 class="welcome-title">Welcome to Jack's AI</h1>
+                    <p class="welcome-subtitle">Your Advanced AI Assistant with 125K Context Window</p>
+                    
+                    <div class="features-grid">
+                        <div class="feature-card">
+                            <div class="feature-icon">🧠</div>
+                            <div class="feature-title">Smart Prompts</div>
+                            <div class="feature-description">AI-powered prompt optimization for better results</div>
                         </div>
-                        <div class="message-bubble">Welcome! I'm Jack AI Beta, your advanced AI assistant powered by Google Gemini. I can help you with complex tasks, analyze documents, generate code, solve problems, and much more. How can I assist you today?</div>
-                        <div class="message-actions">
-                            <button class="message-action" onclick="copyMessage(this)">
-                                <i class="fas fa-copy"></i> Copy
-                            </button>
+                        <div class="feature-card">
+                            <div class="feature-icon">📎</div>
+                            <div class="feature-title">File Support</div>
+                            <div class="feature-description">Upload images, documents, and more for analysis</div>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">💬</div>
+                            <div class="feature-title">Long Context</div>
+                            <div class="feature-description">125,000 token context window for extended conversations</div>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">⚡</div>
+                            <div class="feature-title">Fast & Reliable</div>
+                            <div class="feature-description">Multiple API keys with automatic failover</div>
                         </div>
                     </div>
+                    
+                    <p style="margin-top: 2rem; color: var(--text-muted); font-size: 0.875rem;">
+                        Start by typing a message or uploading a file below!
+                    </p>
                 </div>
             </div>
-
+            
+            <!-- Typing Indicator -->
             <div class="typing-indicator" id="typingIndicator">
-                <div class="message-avatar">
-                    <i class="fas fa-robot"></i>
-                </div>
+                <div class="message-avatar">🤖</div>
                 <div class="typing-dots">
-                    <span class="typing-dot"></span>
-                    <span class="typing-dot"></span>
-                    <span class="typing-dot"></span>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
                 </div>
+                <span style="color: var(--text-muted); margin-left: 0.5rem;">Jack's AI is thinking...</span>
             </div>
-
+            
+            <!-- Input Container -->
             <div class="input-container">
-                <div class="file-upload-area" id="fileUploadArea">
-                    <i class="fas fa-cloud-upload-alt" style="font-size: 2rem; color: var(--primary); margin-bottom: 0.5rem;"></i>
-                    <p style="color: var(--text-secondary); margin-bottom: 0.5rem;">Drop files here or click to browse</p>
-                    <p style="color: var(--text-muted); font-size: 0.75rem;">Supports documents, images, PDFs, and more (max 100MB)</p>
-                    <div class="file-list" id="fileList"></div>
-                </div>
-
                 <div class="input-wrapper">
-                    <div class="input-field">
-                        <textarea 
-                            class="input-box" 
-                            id="messageInput" 
-                            placeholder="Ask me anything..."
-                            rows="1"
-                        ></textarea>
-                        <div class="input-tools">
-                            <button class="input-tool" onclick="toggleFileUpload()">
-                                <i class="fas fa-paperclip"></i>
-                            </button>
+                    <div class="input-group">
+                        <!-- File Upload Area -->
+                        <div class="file-upload-area" id="fileUploadArea" onclick="document.getElementById('fileInput').click()">
+                            <span>📁 Drop files here or click to upload</span>
+                            <div class="file-list" id="fileList"></div>
                         </div>
+                        
+                        <!-- Message Input -->
+                        <textarea 
+                            class="message-input" 
+                            id="messageInput" 
+                            placeholder="Type your message here... (Shift+Enter for new line, Enter to send)"
+                            rows="1"></textarea>
                     </div>
-                    <button class="send-btn" id="sendBtn" onclick="sendMessage()">
-                        <i class="fas fa-paper-plane"></i>
-                        <span>Send</span>
-                    </button>
+                    
+                    <!-- Input Actions -->
+                    <div class="input-actions">
+                        <button class="icon-button" onclick="toggleFileUpload()" title="Attach files">
+                            📎
+                        </button>
+                        <button class="send-button" id="sendButton" onclick="sendMessage()">
+                            <span>Send</span>
+                            <span>➤</span>
+                        </button>
+                    </div>
                 </div>
-
-                <div class="quick-actions">
-                    <button class="quick-action" onclick="insertPrompt('Explain in detail')">
-                        <i class="fas fa-info-circle"></i> Explain
-                    </button>
-                    <button class="quick-action" onclick="insertPrompt('Analyze and provide insights')">
-                        <i class="fas fa-chart-bar"></i> Analyze
-                    </button>
-                    <button class="quick-action" onclick="insertPrompt('Generate code for')">
-                        <i class="fas fa-code"></i> Code
-                    </button>
-                    <button class="quick-action" onclick="insertPrompt('Create a comprehensive')">
-                        <i class="fas fa-file-alt"></i> Create
-                    </button>
-                    <button class="quick-action" onclick="insertPrompt('Solve step by step')">
-                        <i class="fas fa-calculator"></i> Solve
-                    </button>
-                </div>
+                
+                <!-- Hidden File Input -->
+                <input type="file" id="fileInput" multiple style="display: none;" onchange="handleFileSelect(event)">
             </div>
         </main>
     </div>
-
-    <input type="file" id="fileInput" multiple style="display: none;">
-
+    
+    <!-- Prompt Improvement Modal -->
+    <div class="modal" id="promptModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Prompt Optimization</h2>
+                <p class="modal-subtitle">We've improved your prompt for better results. Choose which version to use:</p>
+            </div>
+            
+            <div class="prompt-comparison">
+                <div class="prompt-option" id="originalPromptOption" onclick="selectPromptOption('original')">
+                    <div class="prompt-label">Original Prompt</div>
+                    <div class="prompt-text" id="originalPromptText"></div>
+                </div>
+                
+                <div class="prompt-option selected" id="improvedPromptOption" onclick="selectPromptOption('improved')">
+                    <div class="prompt-label">✨ Improved Prompt (Recommended)</div>
+                    <div class="prompt-text" id="improvedPromptText"></div>
+                </div>
+            </div>
+            
+            <div class="modal-actions">
+                <button class="modal-button secondary" onclick="closePromptModal()">Cancel</button>
+                <button class="modal-button primary" onclick="confirmPromptSelection()">Use Selected</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+    
+    <!-- JavaScript Code -->
     <script>
-        let chatHistory = [];
-        let attachedFiles = [];
-        let sessionId = null;
-
-        function generateSessionId() {
-            return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-        }
-
-        function initializeSession() {
-            sessionId = localStorage.getItem('sessionId');
-            if (!sessionId) {
-                sessionId = generateSessionId();
-                localStorage.setItem('sessionId', sessionId);
-            }
+        // Global variables for managing application state
+        let conversationId = null;  // Current conversation ID
+        let currentTokens = 0;  // Current token usage
+        let selectedPromptType = 'improved';  // Selected prompt type in modal
+        let pendingMessage = null;  // Message waiting for prompt selection
+        let uploadedFiles = [];  // Currently uploaded files
+        
+        // Initialize the application when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            // Initialize conversation
+            initializeConversation();
             
-            const savedHistory = localStorage.getItem('chatHistory');
-            if (savedHistory) {
-                try {
-                    chatHistory = JSON.parse(savedHistory);
-                    displayChatHistory();
-                } catch (e) {
-                    console.error('Error loading chat history:', e);
+            // Set up event listeners
+            setupEventListeners();
+            
+            // Auto-resize textarea
+            setupAutoResize();
+            
+            // Setup drag and drop for file upload
+            setupDragAndDrop();
+            
+            // Load any existing conversation
+            loadConversation();
+        });
+        
+        // Initialize a new conversation
+        function initializeConversation() {
+            // Generate a unique conversation ID
+            conversationId = generateId();
+            currentTokens = 0;
+            updateTokenBar(0);
+        }
+        
+        // Generate a unique ID for conversations
+        function generateId() {
+            return 'conv_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        }
+        
+        // Set up all event listeners
+        function setupEventListeners() {
+            // Enter key to send message (Shift+Enter for new line)
+            document.getElementById('messageInput').addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
                 }
-            }
-        }
-
-        function displayChatHistory() {
-            const container = document.getElementById('messagesContainer');
-            container.innerHTML = '';
+            });
             
-            chatHistory.forEach(msg => {
-                addMessageToUI(msg.role, msg.content, false);
+            // File input change
+            document.getElementById('fileInput').addEventListener('change', handleFileSelect);
+            
+            // Click outside modal to close
+            document.getElementById('promptModal').addEventListener('click', function(e) {
+                if (e.target === this) {
+                    closePromptModal();
+                }
             });
         }
-
-        function toggleSidebar() {
-            const sidebar = document.getElementById('sidebar');
-            sidebar.classList.toggle('open');
-        }
-
-        function autoResizeTextarea() {
+        
+        // Set up auto-resize for textarea
+        function setupAutoResize() {
             const textarea = document.getElementById('messageInput');
-            textarea.style.height = 'auto';
-            textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+            textarea.addEventListener('input', function() {
+                this.style.height = 'auto';
+                this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+            });
         }
-
-        document.addEventListener('DOMContentLoaded', function() {
-            initializeSession();
+        
+        // Set up drag and drop functionality
+        function setupDragAndDrop() {
+            const uploadArea = document.getElementById('fileUploadArea');
             
-            const messageInput = document.getElementById('messageInput');
-            if (messageInput) {
-                messageInput.addEventListener('input', autoResizeTextarea);
-                messageInput.addEventListener('keydown', function(e) {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        sendMessage();
-                    }
-                });
+            // Prevent default drag behaviors
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                uploadArea.addEventListener(eventName, preventDefaults, false);
+                document.body.addEventListener(eventName, preventDefaults, false);
+            });
+            
+            // Highlight drop area when item is dragged over it
+            ['dragenter', 'dragover'].forEach(eventName => {
+                uploadArea.addEventListener(eventName, highlight, false);
+            });
+            
+            ['dragleave', 'drop'].forEach(eventName => {
+                uploadArea.addEventListener(eventName, unhighlight, false);
+            });
+            
+            // Handle dropped files
+            uploadArea.addEventListener('drop', handleDrop, false);
+        }
+        
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        
+        function highlight(e) {
+            document.getElementById('fileUploadArea').classList.add('dragover');
+        }
+        
+        function unhighlight(e) {
+            document.getElementById('fileUploadArea').classList.remove('dragover');
+        }
+        
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            handleFiles(files);
+        }
+        
+        // Toggle file upload area visibility
+        function toggleFileUpload() {
+            const uploadArea = document.getElementById('fileUploadArea');
+            uploadArea.classList.toggle('active');
+        }
+        
+        // Handle file selection
+        function handleFileSelect(e) {
+            const files = e.target.files;
+            handleFiles(files);
+        }
+        
+        // Process selected files
+        function handleFiles(files) {
+            for (let file of files) {
+                // Check file size (max 10MB per file)
+                if (file.size > 10 * 1024 * 1024) {
+                    showToast('error', `File ${file.name} is too large (max 10MB)`);
+                    continue;
+                }
+                
+                // Add file to uploaded files
+                uploadedFiles.push(file);
+                
+                // Display file in list
+                displayFile(file);
             }
             
-            const fileInput = document.getElementById('fileInput');
-            if (fileInput) {
-                fileInput.addEventListener('change', handleFileSelect);
+            // Show upload area if files are added
+            if (uploadedFiles.length > 0) {
+                document.getElementById('fileUploadArea').classList.add('active');
             }
-
-            const fileUploadArea = document.getElementById('fileUploadArea');
-            if (fileUploadArea) {
-                fileUploadArea.addEventListener('dragover', (e) => {
-                    e.preventDefault();
-                    fileUploadArea.classList.add('drag-over');
-                });
-                
-                fileUploadArea.addEventListener('dragleave', () => {
-                    fileUploadArea.classList.remove('drag-over');
-                });
-                
-                fileUploadArea.addEventListener('drop', (e) => {
-                    e.preventDefault();
-                    fileUploadArea.classList.remove('drag-over');
-                    handleFiles(e.dataTransfer.files);
-                });
-                
-                fileUploadArea.addEventListener('click', () => {
-                    document.getElementById('fileInput').click();
-                });
+        }
+        
+        // Display uploaded file in the list
+        function displayFile(file) {
+            const fileList = document.getElementById('fileList');
+            const fileItem = document.createElement('div');
+            fileItem.className = 'file-item';
+            fileItem.innerHTML = `
+                <span>📄 ${file.name}</span>
+                <span class="file-remove" onclick="removeFile('${file.name}')">×</span>
+            `;
+            fileList.appendChild(fileItem);
+        }
+        
+        // Remove file from upload list
+        function removeFile(fileName) {
+            uploadedFiles = uploadedFiles.filter(f => f.name !== fileName);
+            
+            // Update display
+            const fileList = document.getElementById('fileList');
+            fileList.innerHTML = '';
+            uploadedFiles.forEach(file => displayFile(file));
+            
+            // Hide upload area if no files
+            if (uploadedFiles.length === 0) {
+                document.getElementById('fileUploadArea').classList.remove('active');
             }
-        });
-
+        }
+        
+        // Send message to the server
         async function sendMessage() {
-            const messageInput = document.getElementById('messageInput');
-            const message = messageInput.value.trim();
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
             
-            if (!message && attachedFiles.length === 0) {
+            if (!message && uploadedFiles.length === 0) {
+                showToast('warning', 'Please enter a message or upload a file');
                 return;
             }
             
-            messageInput.value = '';
-            autoResizeTextarea();
-            document.getElementById('sendBtn').disabled = true;
+            // Disable send button
+            document.getElementById('sendButton').disabled = true;
             
-            if (message) {
-                addMessageToUI('user', message, true);
+            // Hide welcome screen
+            const welcomeScreen = document.getElementById('welcomeScreen');
+            if (welcomeScreen) {
+                welcomeScreen.style.display = 'none';
             }
             
+            // Display user message
+            displayMessage('user', message, uploadedFiles);
+            
+            // Clear input and files
+            input.value = '';
+            input.style.height = 'auto';
+            const filesToSend = [...uploadedFiles];
+            uploadedFiles = [];
+            document.getElementById('fileList').innerHTML = '';
+            document.getElementById('fileUploadArea').classList.remove('active');
+            
+            // Show typing indicator
             document.getElementById('typingIndicator').classList.add('active');
             
             try {
+                // Prepare form data
                 const formData = new FormData();
                 formData.append('message', message);
-                formData.append('session_id', sessionId);
+                formData.append('conversation_id', conversationId);
                 
-                for (let file of attachedFiles) {
+                // Add files to form data
+                filesToSend.forEach(file => {
                     formData.append('files', file);
-                }
+                });
                 
+                // Send request to server
                 const response = await fetch('/chat', {
                     method: 'POST',
                     body: formData
                 });
                 
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    throw new Error('Failed to send message');
                 }
                 
                 const data = await response.json();
                 
-                if (data.success) {
-                    addMessageToUI('assistant', data.response, true);
+                // Check if prompt was improved
+                if (data.prompt_improved) {
+                    // Show prompt improvement modal
+                    pendingMessage = data;
+                    showPromptModal(message, data.improved_prompt);
                 } else {
-                    const errorMsg = data.error || 'Failed to get response.';
-                    showNotification(errorMsg, 'error');
+                    // Display assistant response
+                    displayMessage('assistant', data.response);
+                    
+                    // Update token usage
+                    updateTokenBar(data.total_tokens);
+                    
+                    // Check if approaching token limit
+                    if (data.total_tokens > 100000) {
+                        showToast('warning', 'Approaching token limit. Consider starting a new chat or compacting the conversation.');
+                    }
                 }
+                
             } catch (error) {
-                console.error('Chat error:', error);
-                showNotification('Connection error. Please check if the server is running.', 'error');
+                console.error('Error:', error);
+                showToast('error', 'Failed to send message. Please try again.');
+                
+                // Remove the user message if sending failed
+                const messages = document.querySelectorAll('.message');
+                if (messages.length > 0) {
+                    messages[messages.length - 1].remove();
+                }
             } finally {
+                // Hide typing indicator
                 document.getElementById('typingIndicator').classList.remove('active');
-                document.getElementById('sendBtn').disabled = false;
-                clearFiles();
+                
+                // Re-enable send button
+                document.getElementById('sendButton').disabled = false;
             }
         }
-
-        function addMessageToUI(role, content, save = false) {
+        
+        // Display a message in the chat
+        function displayMessage(role, content, files = []) {
             const container = document.getElementById('messagesContainer');
-            const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
             
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${role}`;
-            messageDiv.innerHTML = `
-                <div class="message-avatar">
-                    <i class="fas fa-${role === 'user' ? 'user' : 'robot'}"></i>
-                </div>
-                <div class="message-content">
-                    <div class="message-meta">
-                        <span class="message-author">${role === 'user' ? 'You' : 'Jack AI'}</span>
-                        <span class="message-time">${time}</span>
-                    </div>
-                    <div class="message-bubble">${content}</div>
-                    <div class="message-actions">
-                        <button class="message-action" onclick="copyMessage(this)">
-                            <i class="fas fa-copy"></i> Copy
-                        </button>
-                    </div>
-                </div>
-            `;
             
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            avatar.textContent = role === 'user' ? 'U' : 'AI';
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            
+            // Process content for formatting
+            const formattedContent = formatMessageContent(content);
+            contentDiv.innerHTML = formattedContent;
+            
+            // Add timestamp
+            const timestamp = document.createElement('div');
+            timestamp.className = 'message-timestamp';
+            timestamp.textContent = new Date().toLocaleTimeString();
+            contentDiv.appendChild(timestamp);
+            
+            // Add files if present
+            if (files && files.length > 0) {
+                const filesDiv = document.createElement('div');
+                filesDiv.className = 'message-files';
+                files.forEach(file => {
+                    const fileTag = document.createElement('span');
+                    fileTag.className = 'file-tag';
+                    fileTag.innerHTML = `📎 ${file.name || file}`;
+                    filesDiv.appendChild(fileTag);
+                });
+                contentDiv.appendChild(filesDiv);
+            }
+            
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(contentDiv);
             container.appendChild(messageDiv);
+            
+            // Scroll to bottom
             container.scrollTop = container.scrollHeight;
+        }
+        
+        // Format message content (handle code blocks, etc.)
+        function formatMessageContent(content) {
+            // Escape HTML
+            content = content.replace(/&/g, '&amp;')
+                           .replace(/</g, '&lt;')
+                           .replace(/>/g, '&gt;');
             
-            if (save) {
-                chatHistory.push({ role, content });
-                localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
-            }
-        }
-
-        function copyMessage(button) {
-            const content = button.closest('.message-content').querySelector('.message-bubble').textContent;
-            navigator.clipboard.writeText(content);
-            showNotification('Message copied to clipboard', 'success');
-        }
-
-        function showNotification(message, type = 'success') {
-            const notification = document.createElement('div');
-            notification.className = `notification ${type}`;
-            notification.innerHTML = `
-                <i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}"></i>
-                <span>${message}</span>
-                <i class="fas fa-times notification-close" onclick="this.parentElement.remove()"></i>
-            `;
-            document.body.appendChild(notification);
-            
-            setTimeout(() => {
-                notification.remove();
-            }, 5000);
-        }
-
-        function toggleFileUpload() {
-            const fileArea = document.getElementById('fileUploadArea');
-            if (fileArea.classList.contains('active')) {
-                fileArea.classList.remove('active');
-            } else {
-                fileArea.classList.add('active');
-            }
-        }
-
-        function handleFileSelect(event) {
-            handleFiles(event.target.files);
-        }
-
-        function handleFiles(files) {
-            const fileList = document.getElementById('fileList');
-            
-            for (let file of files) {
-                if (file.size > 100 * 1024 * 1024) {
-                    showNotification(`File ${file.name} is too large. Max size is 100MB.`, 'error');
-                    continue;
-                }
-                
-                attachedFiles.push(file);
-                
-                const fileItem = document.createElement('div');
-                fileItem.className = 'file-item';
-                fileItem.innerHTML = `
-                    <i class="fas fa-file"></i>
-                    <span>${file.name}</span>
-                    <i class="fas fa-times file-remove" onclick="removeFile('${file.name}')"></i>
-                `;
-                
-                fileList.appendChild(fileItem);
-            }
-        }
-
-        function removeFile(fileName) {
-            attachedFiles = attachedFiles.filter(f => f.name !== fileName);
-            
-            const fileList = document.getElementById('fileList');
-            const items = fileList.querySelectorAll('.file-item');
-            items.forEach(item => {
-                if (item.textContent.includes(fileName)) {
-                    item.remove();
-                }
+            // Format code blocks
+            content = content.replace(/```(\w+)?\n([\s\S]*?)```/g, function(match, lang, code) {
+                return `<pre><code class="language-${lang || 'plaintext'}">${code}</code></pre>`;
             });
             
-            if (attachedFiles.length === 0) {
-                document.getElementById('fileUploadArea').classList.remove('active');
+            // Format inline code
+            content = content.replace(/`([^`]+)`/g, '<code>$1</code>');
+            
+            // Format bold text
+            content = content.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            
+            // Format italic text
+            content = content.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+            
+            // Format line breaks
+            content = content.replace(/\n/g, '<br>');
+            
+            return content;
+        }
+        
+        // Show prompt improvement modal
+        function showPromptModal(original, improved) {
+            document.getElementById('originalPromptText').textContent = original;
+            document.getElementById('improvedPromptText').textContent = improved;
+            document.getElementById('promptModal').classList.add('active');
+            selectedPromptType = 'improved';
+            selectPromptOption('improved');
+        }
+        
+        // Close prompt improvement modal
+        function closePromptModal() {
+            document.getElementById('promptModal').classList.remove('active');
+            pendingMessage = null;
+        }
+        
+        // Select prompt option in modal
+        function selectPromptOption(type) {
+            selectedPromptType = type;
+            
+            // Update UI
+            document.getElementById('originalPromptOption').classList.toggle('selected', type === 'original');
+            document.getElementById('improvedPromptOption').classList.toggle('selected', type === 'improved');
+        }
+        
+        // Confirm prompt selection and continue
+        async function confirmPromptSelection() {
+            if (!pendingMessage) return;
+            
+            closePromptModal();
+            
+            // Show typing indicator
+            document.getElementById('typingIndicator').classList.add('active');
+            
+            try {
+                // Send confirmation to server
+                const response = await fetch('/confirm-prompt', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        conversation_id: conversationId,
+                        use_improved: selectedPromptType === 'improved'
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to confirm prompt');
+                }
+                
+                const data = await response.json();
+                
+                // Display assistant response
+                displayMessage('assistant', data.response);
+                
+                // Update token usage
+                updateTokenBar(data.total_tokens);
+                
+            } catch (error) {
+                console.error('Error:', error);
+                showToast('error', 'Failed to process response. Please try again.');
+            } finally {
+                // Hide typing indicator
+                document.getElementById('typingIndicator').classList.remove('active');
+                pendingMessage = null;
             }
         }
-
-        function clearFiles() {
-            attachedFiles = [];
-            document.getElementById('fileList').innerHTML = '';
-            document.getElementById('fileUploadArea').classList.remove('active');
+        
+        // Update token usage bar
+        function updateTokenBar(tokens) {
+            currentTokens = tokens;
+            const percentage = (tokens / 125000) * 100;
+            
+            document.getElementById('currentTokens').textContent = tokens.toLocaleString();
+            document.getElementById('tokenProgress').style.width = percentage + '%';
+            
+            // Change color based on usage
+            const progressBar = document.getElementById('tokenProgress');
+            if (percentage > 80) {
+                progressBar.style.background = 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)';
+            } else if (percentage > 60) {
+                progressBar.style.background = 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)';
+            } else {
+                progressBar.style.background = 'var(--gradient-primary)';
+            }
         }
-
-        function newChat() {
-            if (confirm('Start a new chat? Current conversation will be saved.')) {
-                chatHistory = [];
-                localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
-                
+        
+        // Start a new chat
+        function startNewChat() {
+            if (confirm('Start a new conversation? Current conversation will be saved.')) {
+                // Clear messages
                 const container = document.getElementById('messagesContainer');
                 container.innerHTML = '';
                 
-                addMessageToUI('assistant', 'New chat started! How can I help you today?', true);
-                showNotification('New chat created', 'success');
+                // Show welcome screen
+                const welcomeScreen = document.createElement('div');
+                welcomeScreen.className = 'welcome-screen';
+                welcomeScreen.id = 'welcomeScreen';
+                welcomeScreen.innerHTML = `
+                    <h1 class="welcome-title">Welcome to Jack's AI</h1>
+                    <p class="welcome-subtitle">Your Advanced AI Assistant with 125K Context Window</p>
+                    
+                    <div class="features-grid">
+                        <div class="feature-card">
+                            <div class="feature-icon">🧠</div>
+                            <div class="feature-title">Smart Prompts</div>
+                            <div class="feature-description">AI-powered prompt optimization for better results</div>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">📎</div>
+                            <div class="feature-title">File Support</div>
+                            <div class="feature-description">Upload images, documents, and more for analysis</div>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">💬</div>
+                            <div class="feature-title">Long Context</div>
+                            <div class="feature-description">125,000 token context window for extended conversations</div>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">⚡</div>
+                            <div class="feature-title">Fast & Reliable</div>
+                            <div class="feature-description">Multiple API keys with automatic failover</div>
+                        </div>
+                    </div>
+                    
+                    <p style="margin-top: 2rem; color: var(--text-muted); font-size: 0.875rem;">
+                        Start by typing a message or uploading a file below!
+                    </p>
+                `;
+                container.appendChild(welcomeScreen);
+                
+                // Initialize new conversation
+                initializeConversation();
+                
+                showToast('success', 'New conversation started');
             }
         }
-
-        function clearChat() {
-            if (confirm('Clear all messages? This cannot be undone.')) {
-                chatHistory = [];
-                localStorage.removeItem('chatHistory');
+        
+        // Compact the current conversation
+        async function compactConversation() {
+            if (!confirm('Compact this conversation? This will summarize the chat history to save tokens.')) {
+                return;
+            }
+            
+            // Show loading
+            showToast('info', 'Compacting conversation...');
+            
+            try {
+                const response = await fetch('/compact', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        conversation_id: conversationId
+                    })
+                });
                 
+                if (!response.ok) {
+                    throw new Error('Failed to compact conversation');
+                }
+                
+                const data = await response.json();
+                
+                // Clear current messages
                 const container = document.getElementById('messagesContainer');
                 container.innerHTML = '';
                 
-                addMessageToUI('assistant', 'Chat cleared! How can I help you today?', false);
-                showNotification('Chat cleared', 'success');
+                // Display compacted summary
+                displayMessage('assistant', `📦 Conversation Compacted\n\n${data.summary}`);
+                
+                // Update token usage
+                updateTokenBar(data.total_tokens);
+                
+                showToast('success', 'Conversation compacted successfully');
+                
+            } catch (error) {
+                console.error('Error:', error);
+                showToast('error', 'Failed to compact conversation');
             }
         }
-
+        
+        // Export chat history
         function exportChat() {
             const messages = document.querySelectorAll('.message');
-            let exportText = 'Jack AI Beta Chat Export\n';
-            exportText += '========================\n\n';
+            let chatText = 'Jack\'s AI - Chat Export\n';
+            chatText += '========================\n\n';
             
             messages.forEach(msg => {
-                const author = msg.querySelector('.message-author').textContent;
-                const time = msg.querySelector('.message-time').textContent;
-                const content = msg.querySelector('.message-bubble').textContent;
-                exportText += `[${time}] ${author}:\n${content}\n\n`;
+                const role = msg.classList.contains('user') ? 'User' : 'Assistant';
+                const content = msg.querySelector('.message-content').textContent;
+                const timestamp = msg.querySelector('.message-timestamp').textContent;
+                
+                chatText += `[${timestamp}] ${role}:\n${content}\n\n`;
             });
             
-            const blob = new Blob([exportText], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
+            // Create download link
+            const blob = new Blob([chatText], { type: 'text/plain' });
+            const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `jack-ai-chat-${new Date().toISOString()}.txt`;
+            a.download = `jacks-ai-chat-${new Date().toISOString().split('T')[0]}.txt`;
+            document.body.appendChild(a);
             a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
             
-            showNotification('Chat exported successfully', 'success');
+            showToast('success', 'Chat exported successfully');
         }
-
-        function insertPrompt(text) {
-            const input = document.getElementById('messageInput');
-            input.value = text + ' ';
-            input.focus();
-            autoResizeTextarea();
+        
+        // Clear chat history
+        function clearChat() {
+            if (confirm('Clear all messages? This cannot be undone.')) {
+                const container = document.getElementById('messagesContainer');
+                container.innerHTML = '';
+                
+                // Show welcome screen
+                const welcomeScreen = document.createElement('div');
+                welcomeScreen.className = 'welcome-screen';
+                welcomeScreen.id = 'welcomeScreen';
+                welcomeScreen.innerHTML = `
+                    <h1 class="welcome-title">Welcome to Jack's AI</h1>
+                    <p class="welcome-subtitle">Your Advanced AI Assistant with 125K Context Window</p>
+                    
+                    <div class="features-grid">
+                        <div class="feature-card">
+                            <div class="feature-icon">🧠</div>
+                            <div class="feature-title">Smart Prompts</div>
+                            <div class="feature-description">AI-powered prompt optimization for better results</div>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">📎</div>
+                            <div class="feature-title">File Support</div>
+                            <div class="feature-description">Upload images, documents, and more for analysis</div>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">💬</div>
+                            <div class="feature-title">Long Context</div>
+                            <div class="feature-description">125,000 token context window for extended conversations</div>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">⚡</div>
+                            <div class="feature-title">Fast & Reliable</div>
+                            <div class="feature-description">Multiple API keys with automatic failover</div>
+                        </div>
+                    </div>
+                    
+                    <p style="margin-top: 2rem; color: var(--text-muted); font-size: 0.875rem;">
+                        Start by typing a message or uploading a file below!
+                    </p>
+                `;
+                container.appendChild(welcomeScreen);
+                
+                updateTokenBar(0);
+                showToast('success', 'Chat cleared');
+            }
         }
-
-        function toggleTheme() {
-            showNotification('Theme customization coming soon!', 'success');
+        
+        // Show toast notification
+        function showToast(type, message) {
+            const container = document.getElementById('toastContainer');
+            
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            
+            const icon = type === 'success' ? '✓' : type === 'error' ? '✗' : type === 'warning' ? '⚠' : 'ℹ';
+            
+            toast.innerHTML = `
+                <span class="toast-icon">${icon}</span>
+                <span class="toast-message">${message}</span>
+                <span class="toast-close" onclick="this.parentElement.remove()">×</span>
+            `;
+            
+            container.appendChild(toast);
+            
+            // Auto remove after 5 seconds
+            setTimeout(() => {
+                toast.remove();
+            }, 5000);
         }
-
-        function openSettings() {
-            showNotification('Settings panel coming soon!', 'success');
+        
+        // Load existing conversation (if any)
+        async function loadConversation() {
+            try {
+                const response = await fetch('/load-conversation', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        conversation_id: conversationId
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    if (data.messages && data.messages.length > 0) {
+                        // Hide welcome screen
+                        const welcomeScreen = document.getElementById('welcomeScreen');
+                        if (welcomeScreen) {
+                            welcomeScreen.style.display = 'none';
+                        }
+                        
+                        // Display messages
+                        data.messages.forEach(msg => {
+                            displayMessage(msg.role, msg.content, msg.files);
+                        });
+                        
+                        // Update token usage
+                        updateTokenBar(data.total_tokens);
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading conversation:', error);
+            }
         }
     </script>
 </body>
 </html>
 """
 
-# Initialize Gemini API
-def initialize_gemini():
-    """Initialize Gemini API with the API key"""
-    api_key = os.environ.get('GEMINI_API_KEY')
-    if not api_key:
-        print("WARNING: GEMINI_API_KEY not set!")
-        print("To set it: export GEMINI_API_KEY='your-api-key'")
-        return None
-    
-    genai.configure(api_key=api_key)
-    return True
-
-# Initialize model
-def get_gemini_model(model_name="gemini-1.5-flash"):
-    """Get Gemini model instance"""
-    if not initialize_gemini():
-        return None
-    
-    try:
-        model = genai.GenerativeModel(model_name)
-        return model
-    except Exception as e:
-        print(f"Error initializing Gemini model: {e}")
-        return None
-
-def process_file_for_gemini(file):
-    """Process uploaded files for Gemini API"""
-    try:
-        file_content = ""
-        file_type = file.content_type
-        
-        if file_type.startswith('image/'):
-            # For images, we'll read them directly
-            img = Image.open(file)
-            return img, "image"
-            
-        elif file_type == 'application/pdf':
-            pdf_reader = PyPDF2.PdfReader(file)
-            text = ""
-            for page in pdf_reader.pages:
-                text += page.extract_text() + "\n"
-            file_content = f"[PDF Document: {file.filename}]\n{text}"
-            
-        elif file_type in ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword']:
-            doc = docx.Document(file)
-            text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
-            file_content = f"[Word Document: {file.filename}]\n{text}"
-            
-        elif file_type in ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel']:
-            workbook = openpyxl.load_workbook(file)
-            text = ""
-            for sheet_name in workbook.sheetnames:
-                sheet = workbook[sheet_name]
-                text += f"\nSheet: {sheet_name}\n"
-                for row in sheet.iter_rows(values_only=True):
-                    text += "\t".join([str(cell) if cell else "" for cell in row]) + "\n"
-            file_content = f"[Excel Spreadsheet: {file.filename}]\n{text}"
-            
-        elif file_type.startswith('text/') or file_type == 'application/javascript' or file_type == 'application/json':
-            text = file.read().decode('utf-8', errors='ignore')
-            file_content = f"[Text File: {file.filename}]\n{text}"
-            
-        else:
-            file_content = f"[File: {file.filename} - Type: {file_type}]"
-        
-        return file_content, "text"
-        
-    except Exception as e:
-        return f"Error processing {file.filename}: {str(e)}", "text"
-
 @app.route('/')
 def index():
-    """Render the main application"""
+    """Serve the main application page."""
+    session_id = get_or_create_session()
     return render_template_string(HTML_TEMPLATE)
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    """Handle chat messages"""
+    """Handle chat messages and file uploads."""
     try:
+        session_id = get_or_create_session()
+        
+        # Get message and conversation ID
         message = request.form.get('message', '')
-        session_id = request.form.get('session_id', 'default')
-        files = request.files.getlist('files')
-        
-        # Initialize session if needed
-        if session_id not in CHAT_SESSIONS:
-            CHAT_SESSIONS[session_id] = {
-                'history': [],
-                'context': []
-            }
-        
-        session = CHAT_SESSIONS[session_id]
-        
-        # Get Gemini model
-        model = get_gemini_model("gemini-1.5-pro")
-        if not model:
-            return jsonify({
-                'success': False,
-                'error': 'Gemini API not configured. Please set GEMINI_API_KEY environment variable.'
-            }), 500
-        
-        # Prepare content parts
-        content_parts = []
-        
-        # Add user message
-        if message:
-            content_parts.append(message)
+        conversation_id = request.form.get('conversation_id')
         
         # Process uploaded files
-        images = []
-        for file in files:
-            if file:
-                content, content_type = process_file_for_gemini(file)
-                if content_type == "image":
-                    images.append(content)
-                else:
-                    content_parts.append(content)
+        files_data = []
+        if 'files' in request.files:
+            files = request.files.getlist('files')
+            for file in files:
+                file_data = process_file_upload(file)
+                if 'error' not in file_data:
+                    files_data.append(file_data)
         
-        # Build the full prompt
-        full_prompt = "\n\n".join(content_parts) if content_parts else "Please analyze the uploaded content."
+        # Get or create conversation
+        if conversation_id not in MEMORY_STORAGE['conversations']:
+            MEMORY_STORAGE['conversations'][conversation_id] = Conversation(id=conversation_id)
         
-        # Add context from previous messages (last 5 exchanges)
-        messages = []
-        for msg in session['history'][-10:]:  # Last 5 exchanges (user + assistant)
-            messages.append(f"{msg['role'].upper()}: {msg['content']}")
+        conversation = MEMORY_STORAGE['conversations'][conversation_id]
         
-        if messages:
-            context = "\n".join(messages)
-            full_prompt = f"Previous conversation:\n{context}\n\nCurrent message:\n{full_prompt}"
+        # Create user message
+        user_message = Message(
+            role='user',
+            content=message,
+            files=files_data
+        )
+        conversation.messages.append(user_message)
+        
+        # Improve prompt
+        improved_prompt, prompt_improved = gemini_manager.improve_prompt(message)
+        
+        if prompt_improved and improved_prompt != message:
+            # Store improved prompt for later use
+            user_message.prompt_improved = True
+            user_message.original_prompt = message
+            
+            return jsonify({
+                'prompt_improved': True,
+                'original_prompt': message,
+                'improved_prompt': improved_prompt,
+                'conversation_id': conversation_id
+            })
         
         # Generate response
-        try:
-            if images:
-                # If we have images, include them in the generation
-                response = model.generate_content([full_prompt] + images)
-            else:
-                response = model.generate_content(full_prompt)
-            
-            ai_response = response.text
-            
-            # Save to history
-            session['history'].append({'role': 'user', 'content': message})
-            session['history'].append({'role': 'assistant', 'content': ai_response})
-            
-            # Keep history size manageable
-            if len(session['history']) > 20:
-                session['history'] = session['history'][-20:]
-            
-            return jsonify({
-                'success': True,
-                'response': ai_response
-            }), 200
-            
-        except Exception as api_error:
-            print(f"Gemini API error: {api_error}")
-            return jsonify({
-                'success': False,
-                'error': f'AI processing error: {str(api_error)}'
-            }), 500
+        response_text, tokens_used = gemini_manager.generate_response(message, files_data)
+        
+        # Create assistant message
+        assistant_message = Message(
+            role='assistant',
+            content=response_text,
+            tokens_used=tokens_used
+        )
+        conversation.messages.append(assistant_message)
+        
+        # Update token count
+        conversation.total_tokens += tokens_used
+        
+        return jsonify({
+            'response': response_text,
+            'total_tokens': conversation.total_tokens,
+            'prompt_improved': False
+        })
         
     except Exception as e:
-        print(f"Chat error: {e}")
+        print(f"Error in chat: {str(e)}")
         traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return jsonify({'error': str(e)}), 500
 
-# Initialize on startup
+@app.route('/confirm-prompt', methods=['POST'])
+def confirm_prompt():
+    """Handle prompt selection confirmation."""
+    try:
+        data = request.json
+        conversation_id = data.get('conversation_id')
+        use_improved = data.get('use_improved', True)
+        
+        # Get conversation
+        conversation = MEMORY_STORAGE['conversations'].get(conversation_id)
+        if not conversation:
+            return jsonify({'error': 'Conversation not found'}), 404
+        
+        # Get last user message
+        last_message = None
+        for msg in reversed(conversation.messages):
+            if msg.role == 'user':
+                last_message = msg
+                break
+        
+        if not last_message:
+            return jsonify({'error': 'No user message found'}), 404
+        
+        # Use selected prompt
+        prompt = last_message.content if not use_improved else last_message.original_prompt
+        if last_message.prompt_improved and use_improved:
+            # The content is already the improved version
+            prompt = last_message.content
+        
+        # Generate response
+        response_text, tokens_used = gemini_manager.generate_response(prompt, last_message.files)
+        
+        # Create assistant message
+        assistant_message = Message(
+            role='assistant',
+            content=response_text,
+            tokens_used=tokens_used
+        )
+        conversation.messages.append(assistant_message)
+        
+        # Update token count
+        conversation.total_tokens += tokens_used
+        
+        return jsonify({
+            'response': response_text,
+            'total_tokens': conversation.total_tokens
+        })
+        
+    except Exception as e:
+        print(f"Error confirming prompt: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/compact', methods=['POST'])
+def compact():
+    """Compact a conversation to reduce token usage."""
+    try:
+        data = request.json
+        conversation_id = data.get('conversation_id')
+        
+        # Get conversation
+        conversation = MEMORY_STORAGE['conversations'].get(conversation_id)
+        if not conversation:
+            return jsonify({'error': 'Conversation not found'}), 404
+        
+        # Compact the conversation
+        summary = gemini_manager.compact_conversation(conversation.messages)
+        
+        # Create new compacted conversation
+        new_conversation = Conversation(id=conversation_id + '_compacted')
+        compacted_message = Message(
+            role='system',
+            content=summary,
+            tokens_used=len(summary.split()) * 1.3  # Rough estimate
+        )
+        new_conversation.messages = [compacted_message]
+        new_conversation.total_tokens = compacted_message.tokens_used
+        new_conversation.compacted = True
+        
+        # Replace old conversation
+        MEMORY_STORAGE['conversations'][conversation_id] = new_conversation
+        
+        return jsonify({
+            'summary': summary,
+            'total_tokens': new_conversation.total_tokens
+        })
+        
+    except Exception as e:
+        print(f"Error compacting conversation: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/load-conversation', methods=['POST'])
+def load_conversation():
+    """Load an existing conversation."""
+    try:
+        data = request.json
+        conversation_id = data.get('conversation_id')
+        
+        # Get conversation
+        conversation = MEMORY_STORAGE['conversations'].get(conversation_id)
+        if not conversation:
+            return jsonify({'messages': [], 'total_tokens': 0})
+        
+        # Convert messages to dict format
+        messages = []
+        for msg in conversation.messages:
+            messages.append({
+                'role': msg.role,
+                'content': msg.content,
+                'files': [f['name'] for f in msg.files] if msg.files else [],
+                'timestamp': msg.timestamp.isoformat()
+            })
+        
+        return jsonify({
+            'messages': messages,
+            'total_tokens': conversation.total_tokens
+        })
+        
+    except Exception as e:
+        print(f"Error loading conversation: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint for monitoring."""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'active_sessions': len(MEMORY_STORAGE['active_sessions']),
+        'total_conversations': len(MEMORY_STORAGE['conversations']),
+        'api_keys_configured': len(API_KEYS)
+    })
+
+# Error handlers
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({'error': 'Not found'}), 404
+
+@app.errorhandler(500)
+def server_error(e):
+    return jsonify({'error': 'Internal server error'}), 500
+
+# Main entry point
 if __name__ == '__main__':
-    # Check if API key is set
-    if not os.environ.get('GEMINI_API_KEY'):
-        print("\n" + "="*60)
-        print("⚠️  WARNING: GEMINI_API_KEY not set!")
-        print("="*60)
-        print("\nTo use Jack AI, you need to set your Gemini API key:")
-        print("1. Get your API key from: https://makersuite.google.com/app/apikey")
-        print("2. Set it as environment variable:")
-        print("   export GEMINI_API_KEY='your-api-key-here'")
-        print("3. Then restart the application")
-        print("="*60 + "\n")
-    else:
-        print("\n" + "="*60)
-        print("✅ Gemini API key detected!")
-        print("="*60 + "\n")
+    # Clean up old sessions periodically (you might want to run this in a background thread)
+    cleanup_old_sessions()
     
     # Get port from environment or use default
     port = int(os.environ.get('PORT', 5000))
     
-    print(f"🚀 Starting Jack AI Beta on http://localhost:{port}")
-    print("Press Ctrl+C to stop the server\n")
-    
-    # Run the Flask app
+    # Run the application
     app.run(host='0.0.0.0', port=port, debug=False)
