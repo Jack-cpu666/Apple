@@ -1931,7 +1931,7 @@ CHAT_COMPACTOR_SYSTEM = """You are a conversation summarizer. Create a comprehen
 def create_ai_client(api_key):
     """Create an OpenAI client configured for Gemini, disabling default proxies."""
     # This explicit http_client setup is the fix for the `TypeError: ... 'proxies'` error on Render.
-    http_client = httpx.Client(proxies=None, transport=httpx.HTTPTransport(local_address="0.0.0.0"))
+    http_client = httpx.Client(proxies={}, transport=httpx.HTTPTransport(local_address="0.0.0.0"))
     return OpenAI(
         api_key=api_key,
         base_url="https://generativelanguage.googleapis.com/v1beta/models",
