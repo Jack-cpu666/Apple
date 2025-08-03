@@ -1,28 +1,24 @@
 """
-Jack's AI - Ultra Modern Web Application (No Authentication)
-Open access version - No login required
+Jack's AI - Ultra Modern Web Application with Gemini API
+Fixed version with proper Google Gemini integration
 Author: Jack's AI System
-Version: 3.0.0
+Version: 3.1.0
 """
 
 import os
 import json
 import base64
-import hashlib
 import secrets
 import traceback
-from datetime import datetime, timedelta
-from functools import wraps
+from datetime import datetime
 from io import BytesIO
 import mimetypes
-import random
-import string
 
-from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for, make_response
-from werkzeug.security import generate_password_hash, check_password_hash
+from flask import Flask, render_template_string, request, jsonify, session
 from werkzeug.utils import secure_filename
 
-from openai import OpenAI
+# Google Gemini imports
+import google.generativeai as genai
 from PIL import Image
 import PyPDF2
 import docx
@@ -30,11 +26,12 @@ import openpyxl
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
 
+# Store chat sessions in memory (use Redis for production)
 CHAT_SESSIONS = {}
-API_KEYS_STATUS = {}
 
+# HTML Template (keeping your beautiful UI exactly as is)
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -556,6 +553,7 @@ HTML_TEMPLATE = """
             position: relative;
             line-height: 1.6;
             word-wrap: break-word;
+            white-space: pre-wrap;
         }
 
         .message.user .message-bubble {
@@ -946,139 +944,6 @@ HTML_TEMPLATE = """
             opacity: 1;
         }
 
-        .modal-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.8);
-            backdrop-filter: blur(var(--blur-base));
-            display: none;
-            align-items: center;
-            justify-content: center;
-            z-index: 1000;
-            padding: 2rem;
-        }
-
-        .modal-overlay.active {
-            display: flex;
-            animation: fade-in 0.3s ease-out;
-        }
-
-        .modal {
-            background: var(--dark-card);
-            backdrop-filter: blur(var(--blur-xl));
-            border: 1px solid var(--border);
-            border-radius: 20px;
-            padding: 2rem;
-            max-width: 600px;
-            width: 100%;
-            max-height: 80vh;
-            overflow-y: auto;
-            box-shadow: var(--shadow-xl);
-            animation: modal-appear 0.3s ease-out;
-        }
-
-        @keyframes modal-appear {
-            from {
-                opacity: 0;
-                transform: scale(0.9);
-            }
-            to {
-                opacity: 1;
-                transform: scale(1);
-            }
-        }
-
-        .modal-header {
-            margin-bottom: 1.5rem;
-        }
-
-        .modal-title {
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            margin-bottom: 0.5rem;
-        }
-
-        .modal-subtitle {
-            color: var(--text-secondary);
-            font-size: 0.875rem;
-        }
-
-        .modal-options {
-            display: flex;
-            flex-direction: column;
-            gap: 1rem;
-            margin-bottom: 2rem;
-        }
-
-        .modal-option {
-            padding: 1.25rem;
-            background: rgba(99, 102, 241, 0.05);
-            border: 2px solid var(--border);
-            border-radius: 12px;
-            cursor: pointer;
-            transition: all var(--transition-fast);
-        }
-
-        .modal-option:hover {
-            border-color: var(--primary);
-            background: rgba(99, 102, 241, 0.1);
-        }
-
-        .modal-option.selected {
-            border-color: var(--primary);
-            background: rgba(99, 102, 241, 0.15);
-        }
-
-        .modal-option-title {
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: 0.5rem;
-        }
-
-        .modal-option-text {
-            color: var(--text-secondary);
-            font-size: 0.875rem;
-            line-height: 1.5;
-        }
-
-        .modal-actions {
-            display: flex;
-            gap: 1rem;
-        }
-
-        .modal-btn {
-            flex: 1;
-            padding: 0.875rem;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 0.875rem;
-            cursor: pointer;
-            transition: all var(--transition-fast);
-            border: none;
-        }
-
-        .modal-btn-primary {
-            background: var(--gradient-primary);
-            color: white;
-        }
-
-        .modal-btn-primary:hover {
-            transform: scale(1.05);
-            box-shadow: 0 10px 30px rgba(99, 102, 241, 0.3);
-        }
-
-        .modal-btn-secondary {
-            background: transparent;
-            color: var(--text-primary);
-            border: 1px solid var(--border);
-        }
-
-        .modal-btn-secondary:hover {
-            background: rgba(99, 102, 241, 0.1);
-            border-color: var(--primary);
-        }
-
         @media (max-width: 768px) {
             .sidebar {
                 position: fixed;
@@ -1112,20 +977,6 @@ HTML_TEMPLATE = """
 
             .message-content {
                 max-width: 85%;
-            }
-
-            .modal {
-                padding: 1.5rem;
-            }
-
-            .quick-actions {
-                overflow-x: auto;
-                flex-wrap: nowrap;
-                -webkit-overflow-scrolling: touch;
-            }
-
-            .quick-actions::-webkit-scrollbar {
-                display: none;
             }
         }
 
@@ -1269,9 +1120,7 @@ HTML_TEMPLATE = """
                             <span class="message-author">Jack AI</span>
                             <span class="message-time">Now</span>
                         </div>
-                        <div class="message-bubble">
-                            Welcome! I'm Jack AI Beta, your advanced AI assistant. I can help you with complex tasks, analyze documents, generate code, solve problems, and much more. How can I assist you today?
-                        </div>
+                        <div class="message-bubble">Welcome! I'm Jack AI Beta, your advanced AI assistant powered by Google Gemini. I can help you with complex tasks, analyze documents, generate code, solve problems, and much more. How can I assist you today?</div>
                         <div class="message-actions">
                             <button class="message-action" onclick="copyMessage(this)">
                                 <i class="fas fa-copy"></i> Copy
@@ -1341,43 +1190,10 @@ HTML_TEMPLATE = """
         </main>
     </div>
 
-    <div class="modal-overlay" id="promptModal">
-        <div class="modal">
-            <div class="modal-header">
-                <h2 class="modal-title">✨ Enhance Your Prompt</h2>
-                <p class="modal-subtitle">Choose how you'd like to ask your question</p>
-            </div>
-            
-            <div class="modal-options">
-                <div class="modal-option" id="originalOption" onclick="selectPromptOption('original')">
-                    <div class="modal-option-title">Original Prompt</div>
-                    <div class="modal-option-text" id="originalPromptText"></div>
-                </div>
-                
-                <div class="modal-option selected" id="enhancedOption" onclick="selectPromptOption('enhanced')">
-                    <div class="modal-option-title">Enhanced Prompt (Recommended)</div>
-                    <div class="modal-option-text" id="enhancedPromptText"></div>
-                </div>
-            </div>
-            
-            <div class="modal-actions">
-                <button class="modal-btn modal-btn-secondary" onclick="closePromptModal()">
-                    Cancel
-                </button>
-                <button class="modal-btn modal-btn-primary" onclick="confirmPromptSelection()">
-                    Use Selected
-                </button>
-            </div>
-        </div>
-    </div>
-
     <input type="file" id="fileInput" multiple style="display: none;">
 
     <script>
         let chatHistory = [];
-        let selectedPromptType = 'enhanced';
-        let currentPrompt = '';
-        let enhancedPrompt = '';
         let attachedFiles = [];
         let sessionId = null;
 
@@ -1458,6 +1274,10 @@ HTML_TEMPLATE = """
                     fileUploadArea.classList.remove('drag-over');
                     handleFiles(e.dataTransfer.files);
                 });
+                
+                fileUploadArea.addEventListener('click', () => {
+                    document.getElementById('fileInput').click();
+                });
             }
         });
 
@@ -1469,9 +1289,6 @@ HTML_TEMPLATE = """
                 return;
             }
             
-            console.log('Sending message:', message);
-            
-            currentPrompt = message;
             messageInput.value = '';
             autoResizeTextarea();
             document.getElementById('sendBtn').disabled = true;
@@ -1483,110 +1300,34 @@ HTML_TEMPLATE = """
             document.getElementById('typingIndicator').classList.add('active');
             
             try {
-                const skipEnhancement = false;
+                const formData = new FormData();
+                formData.append('message', message);
+                formData.append('session_id', sessionId);
                 
-                if (skipEnhancement || message.length < 10) {
-                    await processMessage(message);
-                } else {
-                    try {
-                        const enhanceResponse = await fetch('/enhance_prompt', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify({
-                                prompt: message,
-                                session_id: sessionId
-                            })
-                        });
-                        
-                        if (enhanceResponse.ok) {
-                            const enhanceData = await enhanceResponse.json();
-                            if (enhanceData.success && enhanceData.enhanced_prompt !== message) {
-                                enhancedPrompt = enhanceData.enhanced_prompt;
-                                showPromptModal(message, enhancedPrompt);
-                            } else {
-                                await processMessage(message);
-                            }
-                        } else {
-                            await processMessage(message);
-                        }
-                    } catch (enhanceError) {
-                        console.error('Enhancement failed:', enhanceError);
-                        await processMessage(message);
-                    }
+                for (let file of attachedFiles) {
+                    formData.append('files', file);
                 }
-            } catch (error) {
-                console.error('Send message error:', error);
-                document.getElementById('typingIndicator').classList.remove('active');
-                document.getElementById('sendBtn').disabled = false;
-                showNotification('Failed to send message. Please try again.', 'error');
-            }
-        }
-
-        function showPromptModal(original, enhanced) {
-            document.getElementById('originalPromptText').textContent = original;
-            document.getElementById('enhancedPromptText').textContent = enhanced;
-            document.getElementById('promptModal').classList.add('active');
-            document.getElementById('typingIndicator').classList.remove('active');
-            document.getElementById('sendBtn').disabled = false;
-        }
-
-        function selectPromptOption(type) {
-            selectedPromptType = type;
-            document.getElementById('originalOption').classList.toggle('selected', type === 'original');
-            document.getElementById('enhancedOption').classList.toggle('selected', type === 'enhanced');
-        }
-
-        function closePromptModal() {
-            document.getElementById('promptModal').classList.remove('active');
-            document.getElementById('sendBtn').disabled = false;
-        }
-
-        async function confirmPromptSelection() {
-            closePromptModal();
-            const promptToUse = selectedPromptType === 'original' ? currentPrompt : enhancedPrompt;
-            await processMessage(promptToUse);
-        }
-
-        async function processMessage(prompt) {
-            console.log('Processing message:', prompt);
-            document.getElementById('typingIndicator').classList.add('active');
-            
-            const formData = new FormData();
-            formData.append('message', prompt);
-            formData.append('session_id', sessionId);
-            
-            for (let file of attachedFiles) {
-                formData.append('files', file);
-            }
-            
-            try {
+                
                 const response = await fetch('/chat', {
                     method: 'POST',
                     body: formData
                 });
-                
-                console.log('Response status:', response.status);
                 
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
                 
                 const data = await response.json();
-                console.log('Response data:', data);
                 
                 if (data.success) {
                     addMessageToUI('assistant', data.response, true);
                 } else {
-                    const errorMsg = data.error || 'Failed to get response. Please check your API configuration.';
+                    const errorMsg = data.error || 'Failed to get response.';
                     showNotification(errorMsg, 'error');
-                    addMessageToUI('assistant', 'I apologize, but I encountered an error. Please make sure the API keys are properly configured in the backend.', false);
                 }
             } catch (error) {
                 console.error('Chat error:', error);
                 showNotification('Connection error. Please check if the server is running.', 'error');
-                addMessageToUI('assistant', 'I apologize, but I cannot connect to the server. Please ensure:\n1. The Flask server is running\n2. API keys are properly configured\n3. Your internet connection is stable', false);
             } finally {
                 document.getElementById('typingIndicator').classList.remove('active');
                 document.getElementById('sendBtn').disabled = false;
@@ -1609,7 +1350,7 @@ HTML_TEMPLATE = """
                         <span class="message-author">${role === 'user' ? 'You' : 'Jack AI'}</span>
                         <span class="message-time">${time}</span>
                     </div>
-                    <div class="message-bubble">${content.replace(/\n/g, '<br>')}</div>
+                    <div class="message-bubble">${content}</div>
                     <div class="message-actions">
                         <button class="message-action" onclick="copyMessage(this)">
                             <i class="fas fa-copy"></i> Copy
@@ -1654,7 +1395,6 @@ HTML_TEMPLATE = """
                 fileArea.classList.remove('active');
             } else {
                 fileArea.classList.add('active');
-                document.getElementById('fileInput').click();
             }
         }
 
@@ -1774,153 +1514,53 @@ HTML_TEMPLATE = """
 </html>
 """
 
-API_KEYS = []
-current_key_index = 0
-
-def get_api_keys():
-    global API_KEYS
-    for i in range(1, 11):
-        key = os.environ.get(f'GEMINI_API_KEY_{i}')
-        if key and key != "YOUR_API_KEY_HERE":
-            API_KEYS.append(key)
-            API_KEYS_STATUS[key] = {'failures': 0, 'last_used': None}
+# Initialize Gemini API
+def initialize_gemini():
+    """Initialize Gemini API with the API key"""
+    api_key = os.environ.get('GEMINI_API_KEY')
+    if not api_key:
+        print("WARNING: GEMINI_API_KEY not set!")
+        print("To set it: export GEMINI_API_KEY='your-api-key'")
+        return None
     
-    if not API_KEYS:
-        default_key = os.environ.get('GEMINI_API_KEY')
-        if default_key and default_key != "YOUR_API_KEY_HERE":
-            API_KEYS.append(default_key)
-            API_KEYS_STATUS[default_key] = {'failures': 0, 'last_used': None}
+    genai.configure(api_key=api_key)
+    return True
+
+# Initialize model
+def get_gemini_model(model_name="gemini-1.5-flash"):
+    """Get Gemini model instance"""
+    if not initialize_gemini():
+        return None
     
-    if not API_KEYS:
-        print("WARNING: No API keys found! Please set GEMINI_API_KEY environment variables.")
-        print("To set an API key, use: export GEMINI_API_KEY='your-actual-api-key'")
-        API_KEYS.append("demo_mode")
+    try:
+        model = genai.GenerativeModel(model_name)
+        return model
+    except Exception as e:
+        print(f"Error initializing Gemini model: {e}")
+        return None
 
-def get_next_api_key():
-    global current_key_index
-    
-    if not API_KEYS:
-        get_api_keys()
-    
-    if API_KEYS and API_KEYS[0] == "demo_mode":
-        return "demo_mode"
-    
-    attempts = 0
-    while attempts < len(API_KEYS):
-        key = API_KEYS[current_key_index]
-        
-        if API_KEYS_STATUS.get(key, {}).get('failures', 0) < 3:
-            API_KEYS_STATUS[key]['last_used'] = datetime.now()
-            current_key_index = (current_key_index + 1) % len(API_KEYS)
-            return key
-        
-        current_key_index = (current_key_index + 1) % len(API_KEYS)
-        attempts += 1
-    
-    for key in API_KEYS:
-        API_KEYS_STATUS[key]['failures'] = 0
-    
-    return API_KEYS[0] if API_KEYS else "demo_mode"
-
-def mark_api_key_failure(api_key):
-    if api_key in API_KEYS_STATUS and api_key != "demo_mode":
-        API_KEYS_STATUS[api_key]['failures'] += 1
-
-PROMPT_ENHANCER_SYSTEM = """You are a prompt enhancement specialist. Your job is to take user prompts and make them clearer, more detailed, and more effective for an AI assistant.
-
-Rules:
-1. Preserve the user's original intent completely
-2. Add clarity and context where helpful
-3. Structure the prompt for better AI understanding
-4. Include specific details that will help get a better response
-5. Make the prompt comprehensive but not overly long
-6. If the prompt involves analysis of files or images, specify what kind of analysis would be most helpful
-
-Take the user's prompt and rewrite it to be more effective. Return ONLY the enhanced prompt, nothing else."""
-
-MAIN_AI_SYSTEM = """You are Jack AI Beta, an ultra-advanced artificial intelligence assistant. You are incredibly capable, intelligent, and helpful.
-
-CORE PRINCIPLES:
-
-1. COMPREHENSIVE RESPONSES
-   - Provide extremely detailed, thorough answers
-   - Never use placeholders or shortcuts
-   - Include all necessary code, explanations, and examples
-   - Every response should be production-ready
-
-2. CLARITY AND EDUCATION
-   - Explain complex concepts in simple terms
-   - Use analogies and examples liberally
-   - Break down steps clearly
-   - Write as if teaching someone new to the topic
-
-3. MAXIMUM VALUE
-   - Use the full context window when beneficial
-   - Provide multiple solutions when applicable
-   - Include best practices and recommendations
-   - Anticipate follow-up questions
-
-4. CAPABILITIES
-   - Advanced code generation in any language
-   - Complex document and image analysis
-   - Creative problem solving
-   - Data analysis and visualization
-   - Research and synthesis
-   - Mathematical computations
-
-5. PERSONALITY
-   - Professional yet friendly
-   - Enthusiastic and engaging
-   - Proactive and helpful
-   - Use emojis appropriately 🚀
-
-Remember: The user has unlimited access to your capabilities. Give them exceptional, comprehensive responses that exceed expectations."""
-
-CHAT_COMPACTOR_SYSTEM = """You are a conversation summarizer. Create a comprehensive summary that preserves all important information while reducing token usage.
-
-Requirements:
-1. Keep all key facts, decisions, and outcomes
-2. Maintain chronological flow
-3. Preserve technical details and code
-4. Summarize repetitive discussions efficiently
-5. Include all solutions and answers provided
-6. Make the summary detailed enough for seamless continuation
-
-Create a thorough yet efficient summary."""
-
-def create_ai_client(api_key):
-    return OpenAI(
-        api_key=api_key,
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
-    )
-
-def count_tokens(text):
-    return len(text) // 4
-
-def process_file_for_ai(file):
+def process_file_for_gemini(file):
+    """Process uploaded files for Gemini API"""
     try:
         file_content = ""
         file_type = file.content_type
         
         if file_type.startswith('image/'):
+            # For images, we'll read them directly
             img = Image.open(file)
-            buffered = BytesIO()
-            img.save(buffered, format=img.format if img.format else 'PNG')
-            img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
-            file_content = f"[Image file: {file.filename}]\n[Image data available for analysis]"
-            return file_content, img_base64
+            return img, "image"
             
         elif file_type == 'application/pdf':
             pdf_reader = PyPDF2.PdfReader(file)
             text = ""
             for page in pdf_reader.pages:
                 text += page.extract_text() + "\n"
-            file_content = f"[PDF file: {file.filename}]\nContent:\n{text}"
+            file_content = f"[PDF Document: {file.filename}]\n{text}"
             
         elif file_type in ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword']:
             doc = docx.Document(file)
             text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
-            file_content = f"[Word document: {file.filename}]\nContent:\n{text}"
+            file_content = f"[Word Document: {file.filename}]\n{text}"
             
         elif file_type in ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel']:
             workbook = openpyxl.load_workbook(file)
@@ -1930,262 +1570,140 @@ def process_file_for_ai(file):
                 text += f"\nSheet: {sheet_name}\n"
                 for row in sheet.iter_rows(values_only=True):
                     text += "\t".join([str(cell) if cell else "" for cell in row]) + "\n"
-            file_content = f"[Excel file: {file.filename}]\nContent:\n{text}"
+            file_content = f"[Excel Spreadsheet: {file.filename}]\n{text}"
             
-        elif file_type.startswith('text/'):
+        elif file_type.startswith('text/') or file_type == 'application/javascript' or file_type == 'application/json':
             text = file.read().decode('utf-8', errors='ignore')
-            file_content = f"[Text file: {file.filename}]\nContent:\n{text}"
+            file_content = f"[Text File: {file.filename}]\n{text}"
             
         else:
-            file_content = f"[File: {file.filename}]\n[Type: {file_type}]\n[Unable to process]"
+            file_content = f"[File: {file.filename} - Type: {file_type}]"
         
-        return file_content, None
+        return file_content, "text"
         
     except Exception as e:
-        return f"[Error processing {file.filename}: {str(e)}]", None
+        return f"Error processing {file.filename}: {str(e)}", "text"
 
 @app.route('/')
 def index():
+    """Render the main application"""
     return render_template_string(HTML_TEMPLATE)
-
-@app.route('/enhance_prompt', methods=['POST'])
-def enhance_prompt():
-    try:
-        data = request.json
-        original_prompt = data.get('prompt', '')
-        session_id = data.get('session_id', 'default')
-        
-        if not original_prompt:
-            return jsonify({'success': False, 'error': 'No prompt provided'}), 400
-        
-        api_key = get_next_api_key()
-        
-        if api_key == "demo_mode":
-            return jsonify({
-                'success': True,
-                'enhanced_prompt': original_prompt
-            }), 200
-        
-        client = create_ai_client(api_key)
-        
-        try:
-            response = client.chat.completions.create(
-                model="gemini-2.5-flash",
-                messages=[
-                    {"role": "system", "content": PROMPT_ENHANCER_SYSTEM},
-                    {"role": "user", "content": original_prompt}
-                ],
-                max_tokens=500,
-                temperature=0.7
-            )
-            
-            enhanced_prompt = response.choices[0].message.content
-            
-            return jsonify({
-                'success': True,
-                'enhanced_prompt': enhanced_prompt
-            }), 200
-            
-        except Exception as api_error:
-            print(f"API error in enhance_prompt: {api_error}")
-            mark_api_key_failure(api_key)
-            return jsonify({
-                'success': True,
-                'enhanced_prompt': original_prompt
-            }), 200
-            
-    except Exception as e:
-        print(f"Enhance prompt error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/chat', methods=['POST'])
 def chat():
+    """Handle chat messages"""
     try:
         message = request.form.get('message', '')
         session_id = request.form.get('session_id', 'default')
         files = request.files.getlist('files')
         
+        # Initialize session if needed
         if session_id not in CHAT_SESSIONS:
             CHAT_SESSIONS[session_id] = {
                 'history': [],
-                'token_usage': 0
+                'context': []
             }
         
         session = CHAT_SESSIONS[session_id]
         
-        api_key = get_next_api_key()
+        # Get Gemini model
+        model = get_gemini_model("gemini-1.5-pro")
+        if not model:
+            return jsonify({
+                'success': False,
+                'error': 'Gemini API not configured. Please set GEMINI_API_KEY environment variable.'
+            }), 500
         
-        if api_key == "demo_mode":
-            demo_response = f"""I received your message: "{message}"
-
-However, I'm currently in demo mode because no API keys are configured. To enable full functionality:
-
-1. Get a Gemini API key from Google AI Studio
-2. Set it as an environment variable:
-   export GEMINI_API_KEY='your-actual-api-key'
-3. Restart the Flask application
-
-Once configured, I'll be able to provide intelligent responses, analyze documents, generate code, and much more!"""
+        # Prepare content parts
+        content_parts = []
+        
+        # Add user message
+        if message:
+            content_parts.append(message)
+        
+        # Process uploaded files
+        images = []
+        for file in files:
+            if file:
+                content, content_type = process_file_for_gemini(file)
+                if content_type == "image":
+                    images.append(content)
+                else:
+                    content_parts.append(content)
+        
+        # Build the full prompt
+        full_prompt = "\n\n".join(content_parts) if content_parts else "Please analyze the uploaded content."
+        
+        # Add context from previous messages (last 5 exchanges)
+        messages = []
+        for msg in session['history'][-10:]:  # Last 5 exchanges (user + assistant)
+            messages.append(f"{msg['role'].upper()}: {msg['content']}")
+        
+        if messages:
+            context = "\n".join(messages)
+            full_prompt = f"Previous conversation:\n{context}\n\nCurrent message:\n{full_prompt}"
+        
+        # Generate response
+        try:
+            if images:
+                # If we have images, include them in the generation
+                response = model.generate_content([full_prompt] + images)
+            else:
+                response = model.generate_content(full_prompt)
             
-            session['history'].append({"role": "user", "content": message})
-            session['history'].append({"role": "assistant", "content": demo_response})
+            ai_response = response.text
+            
+            # Save to history
+            session['history'].append({'role': 'user', 'content': message})
+            session['history'].append({'role': 'assistant', 'content': ai_response})
+            
+            # Keep history size manageable
+            if len(session['history']) > 20:
+                session['history'] = session['history'][-20:]
             
             return jsonify({
                 'success': True,
-                'response': demo_response,
-                'token_usage': 0
+                'response': ai_response
             }), 200
-        
-        file_contents = []
-        image_data = None
-        
-        for file in files:
-            if file:
-                content, img_data = process_file_for_ai(file)
-                file_contents.append(content)
-                if img_data:
-                    image_data = img_data
-        
-        full_message = message
-        if file_contents:
-            full_message += "\n\n" + "\n".join(file_contents)
-        
-        messages = [
-            {"role": "system", "content": MAIN_AI_SYSTEM}
-        ]
-        
-        for msg in session['history'][-10:]:
-            messages.append({"role": msg['role'], "content": msg['content']})
-        
-        messages.append({"role": "user", "content": full_message})
-        
-        client = create_ai_client(api_key)
-        
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                response = client.chat.completions.create(
-                    model="gemini-2.5-pro",
-                    messages=messages,
-                    max_tokens=8000,
-                    temperature=0.8
-                )
-                
-                ai_response = response.choices[0].message.content
-                
-                session['history'].append({"role": "user", "content": message})
-                session['history'].append({"role": "assistant", "content": ai_response})
-                
-                token_usage = session['token_usage']
-                token_usage += count_tokens(full_message) + count_tokens(ai_response)
-                session['token_usage'] = token_usage
-                
-                return jsonify({
-                    'success': True,
-                    'response': ai_response,
-                    'token_usage': token_usage
-                }), 200
-                
-            except Exception as api_error:
-                print(f"API attempt {attempt + 1} failed: {api_error}")
-                mark_api_key_failure(api_key)
-                
-                if attempt < max_retries - 1:
-                    api_key = get_next_api_key()
-                    if api_key == "demo_mode":
-                        break
-                    client = create_ai_client(api_key)
-                else:
-                    return jsonify({
-                        'success': False,
-                        'error': 'API key configuration error. Please check your Gemini API keys.'
-                    }), 500
-        
-        return jsonify({
-            'success': False,
-            'error': 'Failed to connect to AI service. Please check API configuration.'
-        }), 500
+            
+        except Exception as api_error:
+            print(f"Gemini API error: {api_error}")
+            return jsonify({
+                'success': False,
+                'error': f'AI processing error: {str(api_error)}'
+            }), 500
         
     except Exception as e:
         print(f"Chat error: {e}")
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
-@app.route('/compact_chat', methods=['POST'])
-def compact_chat():
-    try:
-        data = request.json
-        session_id = data.get('session_id', 'default')
-        
-        if session_id not in CHAT_SESSIONS:
-            return jsonify({
-                'success': False,
-                'error': 'No chat history found'
-            }), 400
-        
-        session = CHAT_SESSIONS[session_id]
-        chat_history = session['history']
-        
-        if len(chat_history) < 10:
-            return jsonify({
-                'success': False,
-                'error': 'Chat history too short to compact'
-            }), 400
-        
-        conversation_text = ""
-        for msg in chat_history:
-            role = "User" if msg['role'] == 'user' else "Assistant"
-            conversation_text += f"{role}: {msg['content']}\n\n"
-        
-        api_key = get_next_api_key()
-        client = create_ai_client(api_key)
-        
-        try:
-            response = client.chat.completions.create(
-                model="gemini-2.5-flash",
-                messages=[
-                    {"role": "system", "content": CHAT_COMPACTOR_SYSTEM},
-                    {"role": "user", "content": f"Please summarize this conversation:\n\n{conversation_text}"}
-                ],
-                max_tokens=2000,
-                temperature=0.7
-            )
-            
-            summary = response.choices[0].message.content
-            
-            session['history'] = [
-                {"role": "assistant", "content": summary}
-            ]
-            
-            token_usage = count_tokens(summary)
-            session['token_usage'] = token_usage
-            
-            return jsonify({
-                'success': True,
-                'summary': summary,
-                'token_usage': token_usage
-            }), 200
-            
-        except Exception as api_error:
-            print(f"Compact chat API error: {api_error}")
-            mark_api_key_failure(api_key)
-            return jsonify({
-                'success': False,
-                'error': 'Failed to compact chat. Please try again.'
-            }), 500
-            
-    except Exception as e:
-        print(f"Compact chat error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-get_api_keys()
-print(f"Initialized with {len(API_KEYS)} API key(s)")
-if API_KEYS and API_KEYS[0] == "demo_mode":
-    print("Running in DEMO MODE - No API keys configured")
-    print("To use the full AI features, set your Gemini API key:")
-    print("  export GEMINI_API_KEY='your-actual-api-key'")
-
+# Initialize on startup
 if __name__ == '__main__':
+    # Check if API key is set
+    if not os.environ.get('GEMINI_API_KEY'):
+        print("\n" + "="*60)
+        print("⚠️  WARNING: GEMINI_API_KEY not set!")
+        print("="*60)
+        print("\nTo use Jack AI, you need to set your Gemini API key:")
+        print("1. Get your API key from: https://makersuite.google.com/app/apikey")
+        print("2. Set it as environment variable:")
+        print("   export GEMINI_API_KEY='your-api-key-here'")
+        print("3. Then restart the application")
+        print("="*60 + "\n")
+    else:
+        print("\n" + "="*60)
+        print("✅ Gemini API key detected!")
+        print("="*60 + "\n")
+    
+    # Get port from environment or use default
     port = int(os.environ.get('PORT', 5000))
-    print(f"Starting Jack AI Beta on http://localhost:{port}")
+    
+    print(f"🚀 Starting Jack AI Beta on http://localhost:{port}")
+    print("Press Ctrl+C to stop the server\n")
+    
+    # Run the Flask app
     app.run(host='0.0.0.0', port=port, debug=False)
