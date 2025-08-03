@@ -2,7 +2,7 @@
 Jack's AI - Ultra Modern Web Application (No Authentication)
 Open access version - No login required
 Author: Jack's AI System
-Version: 3.0.0
+Version: 3.1.0 (Refactored JavaScript)
 """
 
 import os
@@ -1253,7 +1253,7 @@ HTML_TEMPLATE = """
                 </div>
                 
                 <div class="sidebar-actions">
-                    <button class="new-chat-btn" onclick="window.newChat()">
+                    <button class="new-chat-btn">
                         <i class="fas fa-plus"></i> New Chat
                     </button>
                 </div>
@@ -1275,19 +1275,19 @@ HTML_TEMPLATE = """
                     </div>
                     
                     <div class="chat-header-actions">
-                        <button class="header-btn" onclick="window.toggleTheme()">
+                        <button class="header-btn" title="Toggle Theme">
                             <i class="fas fa-moon" id="themeIcon"></i>
                             <span class="tooltip">Toggle Theme</span>
                         </button>
-                        <button class="header-btn" onclick="window.compactChat()">
+                        <button class="header-btn" title="Compact Chat">
                             <i class="fas fa-compress"></i>
                             <span class="tooltip">Compact Chat</span>
                         </button>
-                        <button class="header-btn" onclick="window.exportChat()">
+                        <button class="header-btn" title="Export Chat">
                             <i class="fas fa-download"></i>
                             <span class="tooltip">Export Chat</span>
                         </button>
-                        <button class="header-btn" onclick="window.clearChat()">
+                        <button class="header-btn" title="Clear Chat">
                             <i class="fas fa-trash"></i>
                             <span class="tooltip">Clear Chat</span>
                         </button>
@@ -1314,7 +1314,7 @@ HTML_TEMPLATE = """
                                 👋 Welcome! I'm your advanced AI assistant powered by Gemini 2.5 Pro. I can help you with complex tasks, analyze documents, generate code, and much more. How can I assist you today?
                             </div>
                             <div class="message-actions">
-                                <button class="message-action" onclick="window.copyMessage(this)">
+                                <button class="message-action">
                                     <i class="fas fa-copy"></i> Copy
                                 </button>
                             </div>
@@ -1369,15 +1369,15 @@ HTML_TEMPLATE = """
                                 rows="1"
                             ></textarea>
                             <div class="input-actions">
-                                <button class="input-action-btn" onclick="window.toggleFileUpload()">
+                                <button class="input-action-btn" title="Attach Files">
                                     <i class="fas fa-paperclip"></i>
                                 </button>
-                                <button class="input-action-btn" onclick="window.toggleVoiceInput()">
+                                <button class="input-action-btn" title="Voice Input (Coming Soon)">
                                     <i class="fas fa-microphone"></i>
                                 </button>
                             </div>
                         </div>
-                        <button class="send-button" id="sendButton" onclick="window.sendMessage()">
+                        <button class="send-button" id="sendButton">
                             <i class="fas fa-paper-plane"></i>
                             <span>Send</span>
                         </button>
@@ -1385,19 +1385,19 @@ HTML_TEMPLATE = """
                     
                     <!-- Quick actions -->
                     <div class="quick-actions">
-                        <button class="quick-action" onclick="window.insertPrompt('Explain in detail')">
+                        <button class="quick-action" data-prompt="Explain in detail">
                             <i class="fas fa-info-circle"></i> Explain
                         </button>
-                        <button class="quick-action" onclick="window.insertPrompt('Analyze and provide insights')">
+                        <button class="quick-action" data-prompt="Analyze and provide insights">
                             <i class="fas fa-chart-bar"></i> Analyze
                         </button>
-                        <button class="quick-action" onclick="window.insertPrompt('Generate code for')">
+                        <button class="quick-action" data-prompt="Generate code for">
                             <i class="fas fa-code"></i> Code
                         </button>
-                        <button class="quick-action" onclick="window.insertPrompt('Create a comprehensive')">
+                        <button class="quick-action" data-prompt="Create a comprehensive">
                             <i class="fas fa-file-alt"></i> Create
                         </button>
-                        <button class="quick-action" onclick="window.insertPrompt('Solve step by step')">
+                        <button class="quick-action" data-prompt="Solve step by step">
                             <i class="fas fa-calculator"></i> Solve
                         </button>
                     </div>
@@ -1414,21 +1414,21 @@ HTML_TEMPLATE = """
                 <p class="modal-subtitle">Choose how you'd like to ask your question</p>
             </div>
             
-            <div class="prompt-option" id="originalOption" onclick="window.selectPromptOption('original')">
+            <div class="prompt-option" id="originalOption">
                 <div class="prompt-option-title">Original Prompt</div>
                 <div class="prompt-option-text" id="originalPromptText"></div>
             </div>
             
-            <div class="prompt-option selected" id="enhancedOption" onclick="window.selectPromptOption('enhanced')">
+            <div class="prompt-option selected" id="enhancedOption">
                 <div class="prompt-option-title">Enhanced Prompt (Recommended)</div>
                 <div class="prompt-option-text" id="enhancedPromptText"></div>
             </div>
             
             <div class="modal-actions">
-                <button class="modal-btn modal-btn-secondary" onclick="window.closePromptModal()">
+                <button class="modal-btn modal-btn-secondary">
                     Cancel
                 </button>
-                <button class="modal-btn modal-btn-primary" onclick="window.confirmPromptSelection()">
+                <button class="modal-btn modal-btn-primary">
                     Use Selected Prompt
                 </button>
             </div>
@@ -1436,557 +1436,430 @@ HTML_TEMPLATE = """
     </div>
     
     <!-- File input (hidden) -->
-    <input type="file" id="fileInput" multiple style="display: none;" onchange="window.handleFileSelect(event)">
+    <input type="file" id="fileInput" multiple style="display: none;">
     
     <script>
-        // Application state
-        let chatHistory = [];
-        let tokenUsage = 0;
-        let selectedPromptType = 'enhanced';
-        let currentPrompt = '';
-        let enhancedPrompt = '';
-        let attachedFiles = [];
-        let isDarkTheme = true;
-        let sessionId = null;
-        
-        // Generate session ID
-        function generateSessionId() {
-            return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-        }
-        
-        // Initialize session
-        function initializeSession() {
-            sessionId = localStorage.getItem('sessionId');
-            if (!sessionId) {
-                sessionId = generateSessionId();
-                localStorage.setItem('sessionId', sessionId);
-            }
-            
-            // Load saved chat history
-            const savedHistory = localStorage.getItem('chatHistory');
-            if (savedHistory) {
-                try {
-                    chatHistory = JSON.parse(savedHistory);
-                    displayChatHistory();
-                } catch (e) {
-                    console.error('Error loading chat history:', e);
-                }
-            }
-            
-            // Load token usage
-            const savedTokens = localStorage.getItem('tokenUsage');
-            if (savedTokens) {
-                tokenUsage = parseInt(savedTokens) || 0;
-                updateTokenBar();
-            }
-        }
-        
-        // Display chat history
-        function displayChatHistory() {
-            const container = document.getElementById('messagesContainer');
-            container.innerHTML = `
-                <div class="date-divider">
-                    <span>Today</span>
-                </div>
-            `;
-            
-            chatHistory.forEach(msg => {
-                addMessageToUI(msg.role, msg.content, false);
-            });
-        }
-        
-        // Initialize particles
-        function createParticles() {
-            const particlesContainer = document.getElementById('particles');
-            for (let i = 0; i < 50; i++) {
-                const particle = document.createElement('div');
-                particle.className = 'particle';
-                particle.style.left = Math.random() * 100 + '%';
-                particle.style.animationDelay = Math.random() * 15 + 's';
-                particle.style.animationDuration = (15 + Math.random() * 10) + 's';
-                particlesContainer.appendChild(particle);
-            }
-        }
-        
-        // Theme toggle
-        window.toggleTheme = function() {
-            isDarkTheme = !isDarkTheme;
-            document.documentElement.setAttribute('data-theme', isDarkTheme ? 'dark' : 'light');
-            const icon = document.getElementById('themeIcon');
-            icon.className = isDarkTheme ? 'fas fa-moon' : 'fas fa-sun';
-            
-            // Save preference
-            localStorage.setItem('theme', isDarkTheme ? 'dark' : 'light');
-        }
-        
-        // Load theme preference
-        function loadThemePreference() {
-            const savedTheme = localStorage.getItem('theme');
-            if (savedTheme) {
-                isDarkTheme = savedTheme === 'dark';
-                document.documentElement.setAttribute('data-theme', savedTheme);
-                const icon = document.getElementById('themeIcon');
-                if (icon) {
-                    icon.className = isDarkTheme ? 'fas fa-moon' : 'fas fa-sun';
-                }
-            }
-        }
-        
-        // Show notification
-        window.showNotification = function(message, type = 'success') {
-            const notification = document.createElement('div');
-            notification.className = `notification ${type}`;
-            notification.innerHTML = `
-                <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'} notification-icon"></i>
-                <span>${message}</span>
-                <i class="fas fa-times notification-close" onclick="this.parentElement.remove()"></i>
-            `;
-            document.body.appendChild(notification);
-            
-            setTimeout(() => {
-                notification.remove();
-            }, 5000);
-        }
-        
-        // Auto-resize textarea
-        window.autoResizeTextarea = function() {
-            const textarea = document.getElementById('messageInput');
-            textarea.style.height = 'auto';
-            textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px';
-        }
-        
-        // Send message
-        window.sendMessage = async function() {
+        document.addEventListener('DOMContentLoaded', function() {
+            // --- STATE AND INITIALIZATION ---
+            let chatHistory = [];
+            let tokenUsage = 0;
+            let selectedPromptType = 'enhanced';
+            let currentPrompt = '';
+            let enhancedPrompt = '';
+            let attachedFiles = [];
+            let isDarkTheme = true;
+            let sessionId = null;
+
+            // --- DOM ELEMENTS ---
             const messageInput = document.getElementById('messageInput');
-            const message = messageInput.value.trim();
-            
-            if (!message && attachedFiles.length === 0) {
-                return;
+            const sendButton = document.getElementById('sendButton');
+            const messagesContainer = document.getElementById('messagesContainer');
+            const typingIndicator = document.getElementById('typingIndicator');
+            const fileUploadSection = document.getElementById('fileUploadSection');
+            const filesPreview = document.getElementById('filesPreview');
+            const fileInput = document.getElementById('fileInput');
+            const promptModal = document.getElementById('promptModal');
+            const themeIcon = document.getElementById('themeIcon');
+            const loadingOverlay = document.getElementById('loadingOverlay');
+
+            // --- CORE FUNCTIONS ---
+
+            function generateSessionId() {
+                return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
             }
-            
-            currentPrompt = message;
-            messageInput.value = '';
-            window.autoResizeTextarea();
-            document.getElementById('sendButton').disabled = true;
-            
-            // Add user message to UI
-            if (message) {
-                window.addMessageToUI('user', message, true);
-            }
-            
-            // Show typing indicator
-            document.getElementById('typingIndicator').classList.add('active');
-            
-            // Get enhanced prompt
-            try {
-                const enhanceResponse = await fetch('/enhance_prompt', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        prompt: message,
-                        session_id: sessionId
-                    })
-                });
-                
-                const enhanceData = await enhanceResponse.json();
-                
-                if (enhanceData.success) {
-                    enhancedPrompt = enhanceData.enhanced_prompt;
-                    window.showPromptModal(message, enhancedPrompt);
-                } else {
-                    await window.processMessage(message);
+
+            function initializeSession() {
+                sessionId = localStorage.getItem('sessionId');
+                if (!sessionId) {
+                    sessionId = generateSessionId();
+                    localStorage.setItem('sessionId', sessionId);
                 }
-            } catch (error) {
-                console.error('Error:', error);
-                await window.processMessage(message);
-            }
-        }
-        
-        // Show prompt modal
-        window.showPromptModal = function(original, enhanced) {
-            document.getElementById('originalPromptText').textContent = original;
-            document.getElementById('enhancedPromptText').textContent = enhanced;
-            document.getElementById('promptModal').classList.add('active');
-            document.getElementById('typingIndicator').classList.remove('active');
-            document.getElementById('sendButton').disabled = false;
-        }
-        
-        // Select prompt option
-        window.selectPromptOption = function(type) {
-            selectedPromptType = type;
-            document.getElementById('originalOption').classList.toggle('selected', type === 'original');
-            document.getElementById('enhancedOption').classList.toggle('selected', type === 'enhanced');
-        }
-        
-        // Close prompt modal
-        window.closePromptModal = function() {
-            document.getElementById('promptModal').classList.remove('active');
-            document.getElementById('sendButton').disabled = false;
-        }
-        
-        // Confirm prompt selection
-        window.confirmPromptSelection = async function() {
-            window.closePromptModal();
-            const promptToUse = selectedPromptType === 'original' ? currentPrompt : enhancedPrompt;
-            await window.processMessage(promptToUse);
-        }
-        
-        // Process message
-        async function processMessage(prompt) {
-            document.getElementById('typingIndicator').classList.add('active');
-            
-            const formData = new FormData();
-            formData.append('message', prompt);
-            formData.append('session_id', sessionId);
-            
-            // Add files
-            for (let file of attachedFiles) {
-                formData.append('files', file);
-            }
-            
-            try {
-                const response = await fetch('/chat', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    window.addMessageToUI('assistant', data.response, true);
-                    tokenUsage = data.token_usage || tokenUsage;
-                    window.updateTokenBar();
-                    
-                    // Save to localStorage
-                    localStorage.setItem('tokenUsage', tokenUsage);
-                    
-                    if (tokenUsage > 100000) {
-                        window.showNotification('Approaching context limit. Consider starting a new chat.', 'warning');
+                const savedHistory = localStorage.getItem('chatHistory');
+                if (savedHistory) {
+                    try {
+                        chatHistory = JSON.parse(savedHistory);
+                        displayChatHistory();
+                    } catch (e) {
+                        console.error('Error loading chat history:', e);
                     }
-                } else {
-                    window.showNotification(data.error || 'Failed to get response', 'error');
                 }
-            } catch (error) {
-                console.error('Error:', error);
-                window.showNotification('Network error. Please try again.', 'error');
-            } finally {
-                document.getElementById('typingIndicator').classList.remove('active');
-                document.getElementById('sendButton').disabled = false;
-                clearFiles();
-            }
-        }
-        
-        // Add message to UI
-        function addMessageToUI(role, content, save = false) {
-            const container = document.getElementById('messagesContainer');
-            const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-            
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${role}`;
-            
-            // Escape content for HTML
-            const escapedContent = content.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
-            
-            messageDiv.innerHTML = `
-                <div class="message-avatar">
-                    <i class="fas fa-${role === 'user' ? 'user' : 'robot'}"></i>
-                </div>
-                <div class="message-content-wrapper">
-                    <div class="message-header">
-                        <span class="message-author">${role === 'user' ? 'You' : "Jack's AI"}</span>
-                        <span class="message-time">${time}</span>
-                    </div>
-                    <div class="message-bubble">${escapedContent}</div>
-                    <div class="message-actions">
-                        <button class="message-action" onclick="window.copyMessage(this)">
-                            <i class="fas fa-copy"></i> Copy
-                        </button>
-                    </div>
-                </div>
-            `;
-            
-            container.appendChild(messageDiv);
-            container.scrollTop = container.scrollHeight;
-            
-            // Save to history
-            if (save) {
-                chatHistory.push({ role, content });
-                localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
-            }
-        }
-        
-        // Copy message
-        window.copyMessage = function(button) {
-            const content = button.closest('.message-content-wrapper').querySelector('.message-bubble').textContent;
-            navigator.clipboard.writeText(content);
-            window.showNotification('Message copied to clipboard', 'success');
-        }
-        
-        // Update token bar
-        function updateTokenBar() {
-            const percentage = Math.min((tokenUsage / 125000) * 100, 100);
-            document.getElementById('tokenFill').style.width = percentage + '%';
-            document.getElementById('tokenCount').textContent = tokenUsage.toLocaleString();
-            
-            // Change color based on usage
-            const fill = document.getElementById('tokenFill');
-            if (percentage > 80) {
-                fill.style.background = 'linear-gradient(135deg, #f5576c 0%, #f093fb 100%)';
-            } else if (percentage > 60) {
-                fill.style.background = 'linear-gradient(135deg, #FA8231 0%, #FFD14C 100%)';
-            }
-        }
-        
-        // Toggle file upload
-        window.toggleFileUpload = function() {
-            const fileSection = document.getElementById('fileUploadSection');
-            if (fileSection.classList.contains('active')) {
-                fileSection.classList.remove('active');
-            } else {
-                fileSection.classList.add('active');
-                document.getElementById('fileInput').click();
-            }
-        }
-        
-        // Handle file select
-        window.handleFileSelect = function(event) {
-            const files = event.target.files;
-            const preview = document.getElementById('filesPreview');
-            
-            for (let file of files) {
-                if (file.size > 100 * 1024 * 1024) {
-                    window.showNotification(`File ${file.name} is too large. Max size is 100MB.`, 'error');
-                    continue;
-                }
-                
-                attachedFiles.push(file);
-                
-                const fileItem = document.createElement('div');
-                fileItem.className = 'file-preview-item';
-                
-                const fileIcon = document.createElement('i');
-                fileIcon.className = 'fas fa-file';
-                
-                const fileName = document.createElement('span');
-                fileName.textContent = file.name;
-                fileName.style.marginLeft = '8px';
-                fileName.style.marginRight = '8px';
-                
-                const removeBtn = document.createElement('i');
-                removeBtn.className = 'fas fa-times file-remove';
-                removeBtn.style.cursor = 'pointer';
-                removeBtn.onclick = function() {
-                    window.removeFile(file.name);
-                };
-                
-                fileItem.appendChild(fileIcon);
-                fileItem.appendChild(fileName);
-                fileItem.appendChild(removeBtn);
-                
-                preview.appendChild(fileItem);
-            }
-            
-            // Remove placeholder text
-            const placeholder = preview.querySelector('.drop-zone-text');
-            if (placeholder && attachedFiles.length > 0) {
-                placeholder.style.display = 'none';
-            }
-        }
-        
-        // Remove file
-        window.removeFile = function(fileName) {
-            attachedFiles = attachedFiles.filter(f => f.name !== fileName);
-            
-            const preview = document.getElementById('filesPreview');
-            const items = preview.querySelectorAll('.file-preview-item');
-            items.forEach(item => {
-                if (item.textContent.includes(fileName)) {
-                    item.remove();
-                }
-            });
-            
-            // Show placeholder if no files
-            if (attachedFiles.length === 0) {
-                const placeholder = preview.querySelector('.drop-zone-text');
-                if (placeholder) {
-                    placeholder.style.display = 'block';
+                const savedTokens = localStorage.getItem('tokenUsage');
+                if (savedTokens) {
+                    tokenUsage = parseInt(savedTokens, 10) || 0;
+                    updateTokenBar();
                 }
             }
-        }
-        
-        // Clear files
-        function clearFiles() {
-            attachedFiles = [];
-            const preview = document.getElementById('filesPreview');
-            preview.innerHTML = '<span class="drop-zone-text">Drop files here or click to browse</span>';
-            document.getElementById('fileUploadSection').classList.remove('active');
-        }
-        
-        // New chat
-        window.newChat = function() {
-            if (confirm('Start a new chat? Current conversation will be saved.')) {
-                chatHistory = [];
-                tokenUsage = 0;
-                window.updateTokenBar();
-                
-                localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
-                localStorage.setItem('tokenUsage', '0');
-                
-                const container = document.getElementById('messagesContainer');
-                container.innerHTML = `
-                    <div class="date-divider">
-                        <span>Today</span>
-                    </div>
-                `;
-                
-                window.addMessageToUI('assistant', 'New chat started! How can I help you today?', true);
-                window.showNotification('New chat created', 'success');
+
+            function displayChatHistory() {
+                messagesContainer.innerHTML = `<div class="date-divider"><span>Today</span></div>`;
+                chatHistory.forEach(msg => {
+                    addMessageToUI(msg.role, msg.content, false);
+                });
             }
-        }
-        
-        // Clear chat
-        window.clearChat = function() {
-            if (confirm('Clear all messages? This cannot be undone.')) {
-                chatHistory = [];
-                tokenUsage = 0;
-                window.updateTokenBar();
-                
-                localStorage.removeItem('chatHistory');
-                localStorage.removeItem('tokenUsage');
-                
-                const container = document.getElementById('messagesContainer');
-                container.innerHTML = `
-                    <div class="date-divider">
-                        <span>Today</span>
-                    </div>
-                `;
-                
-                window.addMessageToUI('assistant', 'Chat cleared! How can I help you today?', false);
-                window.showNotification('Chat cleared', 'success');
-            }
-        }
-        
-        // Compact chat
-        window.compactChat = async function() {
-            if (chatHistory.length < 10) {
-                window.showNotification('Chat is too short to compact', 'warning');
-                return;
+
+            function createParticles() {
+                const particlesContainer = document.getElementById('particles');
+                if (!particlesContainer) return;
+                for (let i = 0; i < 50; i++) {
+                    const particle = document.createElement('div');
+                    particle.className = 'particle';
+                    particle.style.left = Math.random() * 100 + '%';
+                    particle.style.animationDelay = Math.random() * 15 + 's';
+                    particle.style.animationDuration = (15 + Math.random() * 10) + 's';
+                    particlesContainer.appendChild(particle);
+                }
             }
             
-            if (confirm('Compact this conversation to reduce token usage?')) {
-                window.showLoading();
-                
+            async function sendMessage() {
+                const message = messageInput.value.trim();
+                if (!message && attachedFiles.length === 0) return;
+
+                currentPrompt = message;
+                messageInput.value = '';
+                autoResizeTextarea();
+                sendButton.disabled = true;
+
+                if (message) addMessageToUI('user', message, true);
+                typingIndicator.classList.add('active');
+
                 try {
-                    const response = await fetch('/compact_chat', {
+                    const enhanceResponse = await fetch('/enhance_prompt', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            session_id: sessionId
-                        })
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ prompt: message, session_id: sessionId })
                     });
-                    
-                    const data = await response.json();
-                    
-                    if (data.success) {
-                        const container = document.getElementById('messagesContainer');
-                        container.innerHTML = `
-                            <div class="date-divider">
-                                <span>Compacted</span>
-                            </div>
-                        `;
-                        
-                        chatHistory = [{ role: 'assistant', content: 'Chat compacted. Summary:\n\n' + data.summary }];
-                        window.addMessageToUI('assistant', chatHistory[0].content, false);
-                        
-                        tokenUsage = data.token_usage || 0;
-                        window.updateTokenBar();
-                        
-                        localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
-                        localStorage.setItem('tokenUsage', tokenUsage);
-                        
-                        window.showNotification('Chat successfully compacted', 'success');
+                    const enhanceData = await enhanceResponse.json();
+                    if (enhanceData.success && enhanceData.enhanced_prompt && enhanceData.enhanced_prompt !== message) {
+                        enhancedPrompt = enhanceData.enhanced_prompt;
+                        showPromptModal(message, enhancedPrompt);
                     } else {
-                        window.showNotification(data.error || 'Failed to compact chat', 'error');
+                        await processMessage(message);
                     }
                 } catch (error) {
-                    console.error('Error:', error);
-                    window.showNotification('Failed to compact chat', 'error');
-                } finally {
-                    window.hideLoading();
+                    console.error('Error enhancing prompt:', error);
+                    await processMessage(message);
                 }
             }
-        }
-        
-        // Export chat
-        window.exportChat = function() {
-            const messages = document.querySelectorAll('.message');
-            let exportText = 'Jack\'s AI Chat Export\n';
-            exportText += '========================\n\n';
-            
-            messages.forEach(msg => {
-                const author = msg.querySelector('.message-author').textContent;
-                const time = msg.querySelector('.message-time').textContent;
-                const content = msg.querySelector('.message-bubble').textContent;
-                exportText += `[${time}] ${author}:\n${content}\n\n`;
-            });
-            
-            const blob = new Blob([exportText], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `chat-export-${new Date().toISOString()}.txt`;
-            a.click();
-            
-            window.showNotification('Chat exported successfully', 'success');
-        }
-        
-        // Insert prompt
-        window.insertPrompt = function(text) {
-            const input = document.getElementById('messageInput');
-            input.value = text + ' ';
-            input.focus();
-            window.autoResizeTextarea();
-        }
-        
-        // Toggle voice input (placeholder)
-        window.toggleVoiceInput = function() {
-            window.showNotification('Voice input coming soon!', 'warning');
-        }
-        
-        // Show/hide loading
-        window.showLoading = function() {
-            document.getElementById('loadingOverlay').classList.add('active');
-        }
-        
-        window.hideLoading = function() {
-            document.getElementById('loadingOverlay').classList.remove('active');
-        }
-        
-        // Initialize on page load
-        document.addEventListener('DOMContentLoaded', function() {
-            console.log('Initializing Jack\'s AI...');
-            
-            const messageInput = document.getElementById('messageInput');
-            if (messageInput) {
-                messageInput.addEventListener('input', window.autoResizeTextarea);
-                messageInput.addEventListener('keydown', function(e) {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        window.sendMessage();
+
+            async function processMessage(prompt) {
+                typingIndicator.classList.add('active');
+                const formData = new FormData();
+                formData.append('message', prompt);
+                formData.append('session_id', sessionId);
+                attachedFiles.forEach(file => formData.append('files', file));
+
+                try {
+                    const response = await fetch('/chat', { method: 'POST', body: formData });
+                    const data = await response.json();
+                    if (data.success) {
+                        addMessageToUI('assistant', data.response, true);
+                        tokenUsage = data.token_usage || tokenUsage;
+                        updateTokenBar();
+                        localStorage.setItem('tokenUsage', tokenUsage.toString());
+                        if (tokenUsage > 100000) {
+                            showNotification('Approaching context limit. Consider starting a new chat.', 'warning');
+                        }
+                    } else {
+                        showNotification(data.error || 'Failed to get response', 'error');
                     }
+                } catch (error) {
+                    console.error('Error processing message:', error);
+                    showNotification('Network error. Please try again.', 'error');
+                } finally {
+                    typingIndicator.classList.remove('active');
+                    sendButton.disabled = false;
+                    clearFiles();
+                }
+            }
+
+            // --- UI FUNCTIONS ---
+
+            function addMessageToUI(role, content, save = false) {
+                const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${role}`;
+                const escapedContent = content.replace(/</g, '<').replace(/>/g, '>').replace(/\\n/g, '<br>');
+                messageDiv.innerHTML = `
+                    <div class="message-avatar"><i class="fas fa-${role === 'user' ? 'user' : 'robot'}"></i></div>
+                    <div class="message-content-wrapper">
+                        <div class="message-header">
+                            <span class="message-author">${role === 'user' ? 'You' : "Jack's AI"}</span>
+                            <span class="message-time">${time}</span>
+                        </div>
+                        <div class="message-bubble">${escapedContent}</div>
+                        <div class="message-actions">
+                            <button class="message-action"><i class="fas fa-copy"></i> Copy</button>
+                        </div>
+                    </div>`;
+                messageDiv.querySelector('.message-action').addEventListener('click', () => copyMessage(messageDiv));
+                messagesContainer.appendChild(messageDiv);
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                if (save) {
+                    chatHistory.push({ role, content });
+                    localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
+                }
+            }
+
+            function copyMessage(messageElement) {
+                const content = messageElement.querySelector('.message-bubble').textContent;
+                navigator.clipboard.writeText(content).then(() => {
+                    showNotification('Message copied to clipboard', 'success');
+                }).catch(err => {
+                    console.error('Failed to copy text: ', err);
+                    showNotification('Failed to copy message', 'error');
                 });
             }
             
-            // Initialize
+            function updateTokenBar() {
+                const percentage = Math.min((tokenUsage / 125000) * 100, 100);
+                const fill = document.getElementById('tokenFill');
+                if (!fill) return;
+                fill.style.width = percentage + '%';
+                document.getElementById('tokenCount').textContent = tokenUsage.toLocaleString();
+                if (percentage > 80) fill.style.background = 'linear-gradient(135deg, #f5576c 0%, #f093fb 100%)';
+                else if (percentage > 60) fill.style.background = 'linear-gradient(135deg, #FA8231 0%, #FFD14C 100%)';
+                else fill.style.background = '';
+            }
+
+            function showNotification(message, type = 'success') {
+                const notification = document.createElement('div');
+                notification.className = `notification ${type}`;
+                notification.innerHTML = `
+                    <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'} notification-icon"></i>
+                    <span>${message}</span>
+                    <i class="fas fa-times notification-close"></i>`;
+                notification.querySelector('.notification-close').onclick = () => notification.remove();
+                document.body.appendChild(notification);
+                setTimeout(() => notification.remove(), 5000);
+            }
+
+            function autoResizeTextarea() {
+                messageInput.style.height = 'auto';
+                messageInput.style.height = Math.min(messageInput.scrollHeight, 150) + 'px';
+            }
+            
+            // --- EVENT HANDLER FUNCTIONS ---
+
+            function toggleTheme() {
+                isDarkTheme = !isDarkTheme;
+                document.documentElement.setAttribute('data-theme', isDarkTheme ? 'dark' : 'light');
+                themeIcon.className = isDarkTheme ? 'fas fa-moon' : 'fas fa-sun';
+                localStorage.setItem('theme', isDarkTheme ? 'dark' : 'light');
+            }
+            
+            function newChat() {
+                if (confirm('Start a new chat? Current conversation will be saved.')) {
+                    chatHistory = [];
+                    tokenUsage = 0;
+                    updateTokenBar();
+                    localStorage.setItem('chatHistory', '[]');
+                    localStorage.setItem('tokenUsage', '0');
+                    messagesContainer.innerHTML = `<div class="date-divider"><span>Today</span></div>`;
+                    addMessageToUI('assistant', 'New chat started! How can I help you today?', true);
+                    showNotification('New chat created', 'success');
+                }
+            }
+
+            function clearChat() {
+                if (confirm('Clear all messages? This cannot be undone.')) {
+                    chatHistory = [];
+                    tokenUsage = 0;
+                    updateTokenBar();
+                    localStorage.removeItem('chatHistory');
+                    localStorage.removeItem('tokenUsage');
+                    messagesContainer.innerHTML = `<div class="date-divider"><span>Today</span></div>`;
+                    addMessageToUI('assistant', 'Chat cleared! How can I help you today?', false);
+                    showNotification('Chat cleared', 'success');
+                }
+            }
+
+            async function compactChat() {
+                if (chatHistory.length < 10) {
+                    showNotification('Chat is too short to compact', 'warning');
+                    return;
+                }
+                if (confirm('Compact this conversation to reduce token usage?')) {
+                    showLoading();
+                    try {
+                        const response = await fetch('/compact_chat', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ session_id: sessionId })
+                        });
+                        const data = await response.json();
+                        if (data.success) {
+                            messagesContainer.innerHTML = `<div class="date-divider"><span>Compacted</span></div>`;
+                            chatHistory = [{ role: 'assistant', content: 'Chat compacted. Summary:\\n\\n' + data.summary }];
+                            addMessageToUI('assistant', chatHistory[0].content, false);
+                            tokenUsage = data.token_usage || 0;
+                            updateTokenBar();
+                            localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
+                            localStorage.setItem('tokenUsage', tokenUsage.toString());
+                            showNotification('Chat successfully compacted', 'success');
+                        } else {
+                            showNotification(data.error || 'Failed to compact chat', 'error');
+                        }
+                    } catch (error) {
+                        console.error('Error compacting chat:', error);
+                        showNotification('Failed to compact chat', 'error');
+                    } finally {
+                        hideLoading();
+                    }
+                }
+            }
+            
+            function exportChat() {
+                let exportText = 'Jack\\'s AI Chat Export\\n========================\\n\\n';
+                messagesContainer.querySelectorAll('.message').forEach(msg => {
+                    const author = msg.querySelector('.message-author').textContent;
+                    const time = msg.querySelector('.message-time').textContent;
+                    const content = msg.querySelector('.message-bubble').textContent;
+                    exportText += `[${time}] ${author}:\\n${content}\\n\\n`;
+                });
+                const blob = new Blob([exportText], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `chat-export-${new Date().toISOString().split('T')[0]}.txt`;
+                a.click();
+                URL.revokeObjectURL(url);
+                showNotification('Chat exported successfully', 'success');
+            }
+
+            function insertPrompt(text) {
+                messageInput.value = text + ' ';
+                messageInput.focus();
+                autoResizeTextarea();
+            }
+
+            function toggleVoiceInput() {
+                showNotification('Voice input coming soon!', 'warning');
+            }
+            
+            function toggleFileUpload() {
+                if (!fileUploadSection.classList.contains('active')) {
+                    fileUploadSection.classList.add('active');
+                    fileInput.click();
+                } else {
+                    fileUploadSection.classList.remove('active');
+                }
+            }
+
+            function handleFileSelect(event) {
+                const files = event.target.files;
+                const placeholder = filesPreview.querySelector('.drop-zone-text');
+                if (placeholder) placeholder.style.display = 'none';
+
+                for (let file of files) {
+                    if (file.size > 100 * 1024 * 1024) {
+                        showNotification(`File ${file.name} is too large (Max 100MB).`, 'error');
+                        continue;
+                    }
+                    attachedFiles.push(file);
+                    const fileItem = document.createElement('div');
+                    fileItem.className = 'file-preview-item';
+                    fileItem.innerHTML = `<i class="fas fa-file"></i><span>${file.name}</span><i class="fas fa-times file-remove"></i>`;
+                    fileItem.querySelector('.file-remove').addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        removeFile(file.name, fileItem);
+                    });
+                    filesPreview.appendChild(fileItem);
+                }
+                fileInput.value = ''; // Reset for next selection
+            }
+
+            function removeFile(fileName, element) {
+                attachedFiles = attachedFiles.filter(f => f.name !== fileName);
+                element.remove();
+                if (attachedFiles.length === 0) {
+                    const placeholder = filesPreview.querySelector('.drop-zone-text');
+                    if (placeholder) placeholder.style.display = 'block';
+                }
+            }
+
+            function clearFiles() {
+                attachedFiles = [];
+                filesPreview.innerHTML = '<span class="drop-zone-text">Drop files here or click to browse</span>';
+                fileUploadSection.classList.remove('active');
+            }
+
+            function showPromptModal(original, enhanced) {
+                document.getElementById('originalPromptText').textContent = original;
+                document.getElementById('enhancedPromptText').textContent = enhanced;
+                promptModal.classList.add('active');
+                typingIndicator.classList.remove('active');
+                sendButton.disabled = false;
+            }
+
+            function closePromptModal() {
+                promptModal.classList.remove('active');
+            }
+
+            function selectPromptOption(type) {
+                selectedPromptType = type;
+                document.getElementById('originalOption').classList.toggle('selected', type === 'original');
+                document.getElementById('enhancedOption').classList.toggle('selected', type === 'enhanced');
+            }
+
+            async function confirmPromptSelection() {
+                closePromptModal();
+                const promptToUse = selectedPromptType === 'original' ? currentPrompt : enhancedPrompt;
+                await processMessage(promptToUse);
+            }
+
+            function showLoading() { loadingOverlay.classList.add('active'); }
+            function hideLoading() { loadingOverlay.classList.remove('active'); }
+
+            // --- INITIALIZATION ---
+            function loadThemePreference() {
+                const savedTheme = localStorage.getItem('theme');
+                isDarkTheme = savedTheme === 'dark';
+                document.documentElement.setAttribute('data-theme', isDarkTheme ? 'dark' : 'light');
+                themeIcon.className = isDarkTheme ? 'fas fa-moon' : 'fas fa-sun';
+            }
+
             createParticles();
             loadThemePreference();
             initializeSession();
+            // Manually add copy listener to initial message
+            const initialMessage = document.querySelector('.message.assistant');
+            if (initialMessage) {
+                initialMessage.querySelector('.message-action').addEventListener('click', () => copyMessage(initialMessage));
+            }
+            console.log("Jack's AI Initialized and Ready!");
+
+            // --- EVENT LISTENERS ---
+            messageInput.addEventListener('input', autoResizeTextarea);
+            messageInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                }
+            });
+            fileInput.addEventListener('change', handleFileSelect);
+
+            // Header Buttons
+            document.querySelector('.new-chat-btn').addEventListener('click', newChat);
+            document.querySelector('.header-btn[title="Toggle Theme"]').addEventListener('click', toggleTheme);
+            document.querySelector('.header-btn[title="Compact Chat"]').addEventListener('click', compactChat);
+            document.querySelector('.header-btn[title="Export Chat"]').addEventListener('click', exportChat);
+            document.querySelector('.header-btn[title="Clear Chat"]').addEventListener('click', clearChat);
             
-            console.log('Jack\'s AI ready!');
+            // Input Area Buttons
+            sendButton.addEventListener('click', sendMessage);
+            document.querySelector('.input-action-btn[title="Attach Files"]').addEventListener('click', toggleFileUpload);
+            document.querySelector('.input-action-btn[title*="Voice Input"]').addEventListener('click', toggleVoiceInput);
+            
+            // Quick Actions
+            document.querySelectorAll('.quick-action').forEach(btn => {
+                btn.addEventListener('click', () => insertPrompt(btn.dataset.prompt));
+            });
+
+            // Modal Buttons
+            document.querySelector('#promptModal .modal-btn-secondary').addEventListener('click', closePromptModal);
+            document.querySelector('#promptModal .modal-btn-primary').addEventListener('click', confirmPromptSelection);
+            document.getElementById('originalOption').addEventListener('click', () => selectPromptOption('original'));
+            document.getElementById('enhancedOption').addEventListener('click', () => selectPromptOption('enhanced'));
         });
     </script>
 </body>
@@ -2014,19 +1887,25 @@ def get_api_keys():
     
     if not API_KEYS:
         print("WARNING: No API keys found! Please set GEMINI_API_KEY environment variables.")
-        API_KEYS.append("YOUR_API_KEY_HERE")
+        # Fallback for local testing without env vars, replace with a real key if needed
+        # API_KEYS.append("YOUR_API_KEY_HERE") 
 
 def get_next_api_key():
     """Rotate through available API keys"""
     global current_key_index
     
     if not API_KEYS:
-        get_api_keys()
+        get_api_keys() # Attempt to load them
+        if not API_KEYS: # If still no keys, return a placeholder
+            print("ERROR: No usable API keys are configured.")
+            return "NO_KEY_CONFIGURED"
+
     
     attempts = 0
     while attempts < len(API_KEYS):
         key = API_KEYS[current_key_index]
         
+        # Simple failure check, can be expanded with time-based lockout
         if API_KEYS_STATUS.get(key, {}).get('failures', 0) < 3:
             API_KEYS_STATUS[key]['last_used'] = datetime.now()
             current_key_index = (current_key_index + 1) % len(API_KEYS)
@@ -2035,15 +1914,19 @@ def get_next_api_key():
         current_key_index = (current_key_index + 1) % len(API_KEYS)
         attempts += 1
     
+    # If all keys have failed, reset them and try again
+    print("WARNING: All API keys have failed recently. Resetting failure counts.")
     for key in API_KEYS:
         API_KEYS_STATUS[key]['failures'] = 0
     
-    return API_KEYS[0] if API_KEYS else "YOUR_API_KEY_HERE"
+    return API_KEYS[0]
 
 def mark_api_key_failure(api_key):
     """Mark an API key as having failed"""
     if api_key in API_KEYS_STATUS:
         API_KEYS_STATUS[api_key]['failures'] += 1
+        print(f"INFO: Marked API key ending in ...{api_key[-4:]} as failed. Failure count: {API_KEYS_STATUS[api_key]['failures']}")
+
 
 # System prompts for the AI models
 PROMPT_ENHANCER_SYSTEM = """You are a prompt enhancement specialist. Your job is to take user prompts and make them clearer, more detailed, and more effective for an AI assistant.
@@ -2112,7 +1995,7 @@ def create_ai_client(api_key):
     """Create an OpenAI client configured for Gemini"""
     return OpenAI(
         api_key=api_key,
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+        base_url="https://generativelanguage.googleapis.com/v1beta/" # Corrected Base URL
     )
 
 def count_tokens(text):
@@ -2128,44 +2011,50 @@ def process_file_for_ai(file):
         if file_type.startswith('image/'):
             img = Image.open(file)
             buffered = BytesIO()
-            img.save(buffered, format=img.format if img.format else 'PNG')
+            # Convert images to a common format like PNG to avoid issues
+            img_format = 'PNG' if img.format in [None, 'JPEG'] else img.format
+            img.save(buffered, format=img_format)
             img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
-            file_content = f"[Image file: {file.filename}]\n[Image data available for analysis]"
+            # The AI will see the image data, this is for the text context
+            file_content = f"[Image file attached: {secure_filename(file.filename)}]"
             return file_content, img_base64
             
         elif file_type == 'application/pdf':
             pdf_reader = PyPDF2.PdfReader(file)
             text = ""
             for page in pdf_reader.pages:
-                text += page.extract_text() + "\n"
-            file_content = f"[PDF file: {file.filename}]\nContent:\n{text}"
+                extracted = page.extract_text()
+                if extracted:
+                    text += extracted + "\\n"
+            file_content = f"[PDF file: {secure_filename(file.filename)}]\\nContent:\\n{text}"
             
         elif file_type in ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword']:
             doc = docx.Document(file)
-            text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
-            file_content = f"[Word document: {file.filename}]\nContent:\n{text}"
+            text = "\\n".join([paragraph.text for paragraph in doc.paragraphs])
+            file_content = f"[Word document: {secure_filename(file.filename)}]\\nContent:\\n{text}"
             
         elif file_type in ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel']:
-            workbook = openpyxl.load_workbook(file)
+            workbook = openpyxl.load_workbook(file, data_only=True) # data_only to get values not formulas
             text = ""
             for sheet_name in workbook.sheetnames:
                 sheet = workbook[sheet_name]
-                text += f"\nSheet: {sheet_name}\n"
+                text += f"\\nSheet: {sheet_name}\\n"
                 for row in sheet.iter_rows(values_only=True):
-                    text += "\t".join([str(cell) if cell else "" for cell in row]) + "\n"
-            file_content = f"[Excel file: {file.filename}]\nContent:\n{text}"
+                    text += "\\t".join([str(cell) if cell is not None else "" for cell in row]) + "\\n"
+            file_content = f"[Excel file: {secure_filename(file.filename)}]\\nContent:\\n{text}"
             
         elif file_type.startswith('text/'):
             text = file.read().decode('utf-8', errors='ignore')
-            file_content = f"[Text file: {file.filename}]\nContent:\n{text}"
+            file_content = f"[Text file: {secure_filename(file.filename)}]\\nContent:\\n{text}"
             
         else:
-            file_content = f"[File: {file.filename}]\n[Type: {file_type}]\n[Unable to process]"
+            file_content = f"[Unsupported File: {secure_filename(file.filename)}]\\n[Type: {file_type}]"
         
         return file_content, None
         
     except Exception as e:
-        return f"[Error processing {file.filename}: {str(e)}]", None
+        print(f"Error processing file {file.filename}: {e}")
+        return f"[Error processing {secure_filename(file.filename)}: Could not read file content.]", None
 
 # Flask routes - No authentication needed
 @app.route('/')
@@ -2179,26 +2068,25 @@ def enhance_prompt():
     try:
         data = request.json
         original_prompt = data.get('prompt', '')
-        session_id = data.get('session_id', 'default')
         
-        if not original_prompt:
-            return jsonify({'success': False, 'error': 'No prompt provided'}), 400
+        if not original_prompt or len(original_prompt) < 10: # Don't enhance very short prompts
+            return jsonify({'success': False, 'error': 'Prompt too short to enhance'}), 200
         
         api_key = get_next_api_key()
+        if api_key == "NO_KEY_CONFIGURED":
+            return jsonify({'success': False, 'enhanced_prompt': original_prompt}), 200
+
         client = create_ai_client(api_key)
         
         try:
-            response = client.chat.completions.create(
-                model="gemini-2.5-flash",
-                messages=[
-                    {"role": "system", "content": PROMPT_ENHANCER_SYSTEM},
-                    {"role": "user", "content": original_prompt}
-                ],
+            response = client.completions.create(
+                model="gemini-1.5-flash-latest", # Using a completion model for this simple task
+                prompt=f"{PROMPT_ENHANCER_SYSTEM}\\n\\nUser Prompt: \"{original_prompt}\"\\n\\nEnhanced Prompt:",
                 max_tokens=500,
                 temperature=0.7
             )
             
-            enhanced_prompt = response.choices[0].message.content
+            enhanced_prompt = response.choices[0].text.strip()
             
             return jsonify({
                 'success': True,
@@ -2208,9 +2096,10 @@ def enhance_prompt():
         except Exception as api_error:
             print(f"API error in enhance_prompt: {api_error}")
             mark_api_key_failure(api_key)
+            # Fail gracefully by returning success but with the original prompt
             return jsonify({
                 'success': True,
-                'enhanced_prompt': original_prompt
+                'enhanced_prompt': original_prompt 
             }), 200
             
     except Exception as e:
@@ -2225,47 +2114,46 @@ def chat():
         session_id = request.form.get('session_id', 'default')
         files = request.files.getlist('files')
         
-        # Get or create session
         if session_id not in CHAT_SESSIONS:
-            CHAT_SESSIONS[session_id] = {
-                'history': [],
-                'token_usage': 0
-            }
+            CHAT_SESSIONS[session_id] = {'history': [], 'token_usage': 0}
         
-        session = CHAT_SESSIONS[session_id]
+        session_data = CHAT_SESSIONS[session_id]
         
         file_contents = []
         image_data = None
         
         for file in files:
-            if file:
+            if file and file.filename:
                 content, img_data = process_file_for_ai(file)
                 file_contents.append(content)
                 if img_data:
+                    # For simplicity, handle one image at a time with the prompt
                     image_data = img_data
         
-        full_message = message
+        full_prompt_content = [{"type": "text", "text": message}]
+        if image_data:
+            full_prompt_content.append({"type": "image_url", "url": f"data:image/png;base64,{image_data}"})
+        
         if file_contents:
-            full_message += "\n\n" + "\n".join(file_contents)
-        
-        messages = [
-            {"role": "system", "content": MAIN_AI_SYSTEM}
-        ]
-        
-        # Add recent history
-        for msg in session['history'][-10:]:
-            messages.append({"role": msg['role'], "content": msg['content']})
-        
-        messages.append({"role": "user", "content": full_message})
+            file_text = "\\n\\n--- Attached File Context ---\\n" + "\\n".join(file_contents)
+            full_prompt_content[0]['text'] += file_text
+
+
+        messages = [{"role": "system", "content": MAIN_AI_SYSTEM}]
+        messages.extend(session_data['history'][-10:]) # Add recent history
+        messages.append({"role": "user", "content": full_prompt_content})
         
         api_key = get_next_api_key()
+        if api_key == "NO_KEY_CONFIGURED":
+            return jsonify({'success': False, 'error': 'AI Service is not configured.'}), 503
+
         client = create_ai_client(api_key)
         
         max_retries = 3
         for attempt in range(max_retries):
             try:
                 response = client.chat.completions.create(
-                    model="gemini-2.5-pro",
+                    model="gemini-1.5-pro-latest",
                     messages=messages,
                     max_tokens=8000,
                     temperature=0.8
@@ -2274,12 +2162,12 @@ def chat():
                 ai_response = response.choices[0].message.content
                 
                 # Update session
-                session['history'].append({"role": "user", "content": message})
-                session['history'].append({"role": "assistant", "content": ai_response})
+                session_data['history'].append({"role": "user", "content": message}) # only store the text part
+                session_data['history'].append({"role": "assistant", "content": ai_response})
                 
-                token_usage = session['token_usage']
-                token_usage += count_tokens(full_message) + count_tokens(ai_response)
-                session['token_usage'] = token_usage
+                token_usage = session_data['token_usage']
+                token_usage += count_tokens(full_prompt_content[0]['text']) + count_tokens(ai_response)
+                session_data['token_usage'] = token_usage
                 
                 return jsonify({
                     'success': True,
@@ -2288,7 +2176,7 @@ def chat():
                 }), 200
                 
             except Exception as api_error:
-                print(f"API attempt {attempt + 1} failed: {api_error}")
+                print(f"API attempt {attempt + 1} with key ...{api_key[-4:]} failed: {api_error}")
                 mark_api_key_failure(api_key)
                 
                 if attempt < max_retries - 1:
@@ -2298,77 +2186,60 @@ def chat():
                     return jsonify({
                         'success': False,
                         'error': 'AI service temporarily unavailable. Please try again.'
-                    }), 500
+                    }), 503
         
     except Exception as e:
         print(f"Chat error: {e}")
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'An internal server error occurred.'}), 500
 
 @app.route('/compact_chat', methods=['POST'])
 def compact_chat():
     """Compact the chat history to reduce tokens"""
     try:
-        data = request.json
-        session_id = data.get('session_id', 'default')
+        session_id = request.json.get('session_id', 'default')
         
-        if session_id not in CHAT_SESSIONS:
-            return jsonify({
-                'success': False,
-                'error': 'No chat history found'
-            }), 400
+        if session_id not in CHAT_SESSIONS or not CHAT_SESSIONS[session_id]['history']:
+            return jsonify({'success': False, 'error': 'No chat history found'}), 400
         
-        session = CHAT_SESSIONS[session_id]
-        chat_history = session['history']
+        session_data = CHAT_SESSIONS[session_id]
         
-        if len(chat_history) < 10:
-            return jsonify({
-                'success': False,
-                'error': 'Chat history too short to compact'
-            }), 400
+        if len(session_data['history']) < 10:
+            return jsonify({'success': False, 'error': 'Chat history too short to compact'}), 400
         
         conversation_text = ""
-        for msg in chat_history:
+        for msg in session_data['history']:
             role = "User" if msg['role'] == 'user' else "Assistant"
-            conversation_text += f"{role}: {msg['content']}\n\n"
+            # Ensure content is a string
+            content = msg['content'] if isinstance(msg['content'], str) else "Complex content (e.g., image)"
+            conversation_text += f"{role}: {content}\\n\\n"
         
         api_key = get_next_api_key()
+        if api_key == "NO_KEY_CONFIGURED":
+            return jsonify({'success': False, 'error': 'AI Service is not configured.'}), 503
+
         client = create_ai_client(api_key)
         
         try:
-            response = client.chat.completions.create(
-                model="gemini-2.5-flash",
-                messages=[
-                    {"role": "system", "content": CHAT_COMPACTOR_SYSTEM},
-                    {"role": "user", "content": f"Please summarize this conversation:\n\n{conversation_text}"}
-                ],
+            response = client.completions.create(
+                model="gemini-1.5-flash-latest",
+                prompt=f"{CHAT_COMPACTOR_SYSTEM}\\n\\nConversation to summarize:\\n\\n{conversation_text}\\n\\nSummary:",
                 max_tokens=2000,
                 temperature=0.7
             )
             
-            summary = response.choices[0].message.content
+            summary = response.choices[0].text.strip()
             
-            # Replace history with summary
-            session['history'] = [
-                {"role": "assistant", "content": summary}
-            ]
-            
+            session_data['history'] = [{"role": "assistant", "content": f"Previous conversation summarized as: {summary}"}]
             token_usage = count_tokens(summary)
-            session['token_usage'] = token_usage
+            session_data['token_usage'] = token_usage
             
-            return jsonify({
-                'success': True,
-                'summary': summary,
-                'token_usage': token_usage
-            }), 200
+            return jsonify({'success': True, 'summary': summary, 'token_usage': token_usage}), 200
             
         except Exception as api_error:
             print(f"Compact chat API error: {api_error}")
             mark_api_key_failure(api_key)
-            return jsonify({
-                'success': False,
-                'error': 'Failed to compact chat. Please try again.'
-            }), 500
+            return jsonify({'success': False, 'error': 'Failed to compact chat. Please try again.'}), 500
             
     except Exception as e:
         print(f"Compact chat error: {e}")
@@ -2379,4 +2250,7 @@ get_api_keys()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
+    # Use 'waitress' for a production-ready server on Windows, or 'gunicorn' on Linux
+    # For simplicity, we'll stick with Flask's development server here.
+    # For production, consider: from waitress import serve; serve(app, host='0.0.0.0', port=port)
     app.run(host='0.0.0.0', port=port, debug=False)
