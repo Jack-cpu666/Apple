@@ -1,8 +1,8 @@
 """
-Jack's AI - Ultra Modern Web Application with Stunning UI
-This is a full-stack application with advanced UI/UX design
+Jack's AI - Ultra Modern Web Application (No Authentication)
+Open access version - No login required
 Author: Jack's AI System
-Version: 2.0.0
+Version: 3.0.0
 """
 
 import os
@@ -25,7 +25,6 @@ from werkzeug.utils import secure_filename
 
 # Import OpenAI library to interact with Gemini API
 from openai import OpenAI
-import tiktoken  # For token counting
 from PIL import Image  # For image processing
 import PyPDF2  # For PDF processing
 import docx  # For Word document processing
@@ -36,14 +35,11 @@ app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # Max file size: 100MB
 
-# In-memory storage
-USERS_DB = {}
+# In-memory storage for chat sessions
 CHAT_SESSIONS = {}
-USER_TOKENS = {}
 API_KEYS_STATUS = {}
-USER_PREFERENCES = {}  # Store user preferences like theme
 
-# HTML Template - Ultra Modern UI with stunning design
+# HTML Template - Ultra Modern UI with direct access
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -283,57 +279,18 @@ HTML_TEMPLATE = """
             border-radius: 10px;
         }
         
-        .chat-item {
-            padding: 15px;
-            margin-bottom: 10px;
-            border-radius: 15px;
-            cursor: pointer;
-            transition: var(--transition);
-            position: relative;
-            overflow: hidden;
+        .welcome-message {
+            padding: 20px;
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1.6;
         }
         
-        .chat-item::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: -100%;
-            width: 100%;
-            height: 100%;
-            background: var(--primary-gradient);
-            opacity: 0.1;
-            transition: left 0.3s ease;
-        }
-        
-        .chat-item:hover::before {
-            left: 0;
-        }
-        
-        .chat-item:hover {
-            background: rgba(255, 255, 255, 0.1);
-            transform: translateX(5px);
-        }
-        
-        .chat-item-title {
+        .welcome-message h3 {
             color: var(--text-primary);
-            font-weight: 600;
-            margin-bottom: 5px;
-        }
-        
-        .chat-item-preview {
-            color: var(--text-secondary);
-            font-size: 13px;
-            opacity: 0.8;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        
-        .chat-item-time {
-            color: var(--text-secondary);
-            font-size: 11px;
-            margin-top: 5px;
-            opacity: 0.6;
+            margin-bottom: 10px;
+            font-size: 16px;
         }
         
         /* Sidebar actions */
@@ -1035,217 +992,6 @@ HTML_TEMPLATE = """
             box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
         }
         
-        /* Auth container */
-        .auth-container {
-            background: var(--glass-bg);
-            backdrop-filter: blur(20px);
-            border: 1px solid var(--glass-border);
-            border-radius: 30px;
-            padding: 50px;
-            width: 100%;
-            max-width: 480px;
-            box-shadow: 
-                0 20px 40px var(--shadow-color),
-                0 0 80px rgba(102, 126, 234, 0.1),
-                inset 0 0 20px rgba(255, 255, 255, 0.05);
-            animation: slideUp 0.5s ease-out;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .auth-container::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            left: -50%;
-            width: 200%;
-            height: 200%;
-            background: radial-gradient(circle, rgba(102, 126, 234, 0.1) 0%, transparent 70%);
-            animation: rotate 20s linear infinite;
-        }
-        
-        @keyframes rotate {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
-        .auth-header {
-            text-align: center;
-            margin-bottom: 40px;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .auth-logo {
-            width: 80px;
-            height: 80px;
-            margin: 0 auto 20px;
-            background: var(--primary-gradient);
-            border-radius: 20px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 36px;
-            color: white;
-            box-shadow: 0 15px 30px rgba(102, 126, 234, 0.3);
-            animation: bounce 2s infinite;
-        }
-        
-        @keyframes bounce {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-10px); }
-        }
-        
-        .auth-title {
-            font-size: 28px;
-            font-weight: 800;
-            background: var(--primary-gradient);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin-bottom: 10px;
-        }
-        
-        .auth-subtitle {
-            color: var(--text-secondary);
-            font-size: 14px;
-            font-weight: 500;
-        }
-        
-        /* Form styling */
-        .form-group {
-            margin-bottom: 25px;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .form-label {
-            display: block;
-            margin-bottom: 8px;
-            color: var(--text-primary);
-            font-size: 13px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .form-input {
-            width: 100%;
-            padding: 15px 20px;
-            background: rgba(255, 255, 255, 0.05);
-            border: 2px solid var(--glass-border);
-            border-radius: 15px;
-            color: var(--text-primary);
-            font-size: 15px;
-            transition: var(--transition);
-        }
-        
-        .form-input:focus {
-            outline: none;
-            border-color: #667eea;
-            background: rgba(255, 255, 255, 0.1);
-            box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
-        }
-        
-        .form-input::placeholder {
-            color: var(--text-secondary);
-            opacity: 0.5;
-        }
-        
-        /* Password strength indicator */
-        .password-strength {
-            height: 4px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 2px;
-            margin-top: 8px;
-            overflow: hidden;
-        }
-        
-        .password-strength-fill {
-            height: 100%;
-            border-radius: 2px;
-            transition: width 0.3s, background 0.3s;
-        }
-        
-        .password-strength-fill.weak {
-            width: 33%;
-            background: #f5576c;
-        }
-        
-        .password-strength-fill.medium {
-            width: 66%;
-            background: #ffa726;
-        }
-        
-        .password-strength-fill.strong {
-            width: 100%;
-            background: #66bb6a;
-        }
-        
-        /* Submit button */
-        .submit-btn {
-            width: 100%;
-            padding: 18px;
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            border-radius: 15px;
-            font-size: 16px;
-            font-weight: 700;
-            cursor: pointer;
-            transition: var(--transition);
-            position: relative;
-            overflow: hidden;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-top: 30px;
-            box-shadow: 0 15px 30px rgba(102, 126, 234, 0.3);
-        }
-        
-        .submit-btn::before {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 0;
-            height: 0;
-            border-radius: 50%;
-            background: rgba(255, 255, 255, 0.3);
-            transform: translate(-50%, -50%);
-            transition: width 0.5s, height 0.5s;
-        }
-        
-        .submit-btn:hover::before {
-            width: 400px;
-            height: 400px;
-        }
-        
-        .submit-btn:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 20px 40px rgba(102, 126, 234, 0.4);
-        }
-        
-        /* Toggle form link */
-        .form-toggle {
-            text-align: center;
-            margin-top: 30px;
-            color: var(--text-secondary);
-            font-size: 14px;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .form-toggle a {
-            color: #667eea;
-            text-decoration: none;
-            font-weight: 600;
-            transition: var(--transition);
-        }
-        
-        .form-toggle a:hover {
-            color: #764ba2;
-            text-decoration: underline;
-        }
-        
         /* Notifications */
         .notification {
             position: fixed;
@@ -1349,10 +1095,6 @@ HTML_TEMPLATE = """
             
             .message-content-wrapper {
                 max-width: 85%;
-            }
-            
-            .auth-container {
-                padding: 30px;
             }
         }
         
@@ -1487,8 +1229,8 @@ HTML_TEMPLATE = """
     
     <!-- Main container -->
     <div class="main-container">
-        <!-- Chat Interface -->
-        <div class="chat-container" id="chatContainer" style="display: none;">
+        <!-- Chat Interface (No login required) -->
+        <div class="chat-container" id="chatContainer">
             <!-- Sidebar -->
             <aside class="sidebar">
                 <div class="sidebar-header">
@@ -1504,7 +1246,10 @@ HTML_TEMPLATE = """
                 </div>
                 
                 <div class="chat-history" id="chatHistory">
-                    <!-- Chat history items will be added here -->
+                    <div class="welcome-message">
+                        <h3>🚀 Welcome!</h3>
+                        <p>Start chatting with the most advanced AI assistant. No signup required!</p>
+                    </div>
                 </div>
                 
                 <div class="sidebar-actions">
@@ -1542,9 +1287,9 @@ HTML_TEMPLATE = """
                             <i class="fas fa-download"></i>
                             <span class="tooltip">Export Chat</span>
                         </button>
-                        <button class="header-btn" onclick="logout()">
-                            <i class="fas fa-sign-out-alt"></i>
-                            <span class="tooltip">Logout</span>
+                        <button class="header-btn" onclick="clearChat()">
+                            <i class="fas fa-trash"></i>
+                            <span class="tooltip">Clear Chat</span>
                         </button>
                     </div>
                 </header>
@@ -1659,107 +1404,6 @@ HTML_TEMPLATE = """
                 </div>
             </main>
         </div>
-        
-        <!-- Auth Container -->
-        <div class="auth-container" id="authContainer">
-            <div class="auth-header">
-                <div class="auth-logo">
-                    <i class="fas fa-robot"></i>
-                </div>
-                <h1 class="auth-title">Jack's AI</h1>
-                <p class="auth-subtitle">Next Generation AI Assistant</p>
-            </div>
-            
-            <!-- Login Form -->
-            <div id="loginForm">
-                <form onsubmit="return login(event)">
-                    <div class="form-group">
-                        <label class="form-label" for="loginUsername">Username</label>
-                        <input 
-                            type="text" 
-                            id="loginUsername" 
-                            class="form-input" 
-                            placeholder="Enter your username"
-                            required
-                        >
-                    </div>
-                    
-                    <div class="form-group">
-                        <label class="form-label" for="loginPassword">Password</label>
-                        <input 
-                            type="password" 
-                            id="loginPassword" 
-                            class="form-input" 
-                            placeholder="Enter your password"
-                            required
-                        >
-                    </div>
-                    
-                    <button type="submit" class="submit-btn">
-                        Sign In
-                    </button>
-                </form>
-                
-                <div class="form-toggle">
-                    Don't have an account? 
-                    <a href="javascript:void(0)" onclick="toggleAuthForm('register'); return false;">Create one</a>
-                </div>
-            </div>
-            
-            <!-- Register Form -->
-            <div id="registerForm" style="display: none;">
-                <form onsubmit="return register(event)">
-                    <div class="form-group">
-                        <label class="form-label" for="registerUsername">Username</label>
-                        <input 
-                            type="text" 
-                            id="registerUsername" 
-                            class="form-input" 
-                            placeholder="Choose a username"
-                            required
-                            minlength="3"
-                        >
-                    </div>
-                    
-                    <div class="form-group">
-                        <label class="form-label" for="registerPassword">Password</label>
-                        <input 
-                            type="password" 
-                            id="registerPassword" 
-                            class="form-input" 
-                            placeholder="Create a strong password"
-                            required
-                            minlength="6"
-                            onkeyup="checkPasswordStrength(this.value)"
-                        >
-                        <div class="password-strength">
-                            <div class="password-strength-fill" id="passwordStrength"></div>
-                        </div>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label class="form-label" for="confirmPassword">Confirm Password</label>
-                        <input 
-                            type="password" 
-                            id="confirmPassword" 
-                            class="form-input" 
-                            placeholder="Confirm your password"
-                            required
-                            minlength="6"
-                        >
-                    </div>
-                    
-                    <button type="submit" class="submit-btn">
-                        Create Account
-                    </button>
-                </form>
-                
-                <div class="form-toggle">
-                    Already have an account? 
-                    <a href="javascript:void(0)" onclick="toggleAuthForm('login'); return false;">Sign in</a>
-                </div>
-            </div>
-        </div>
     </div>
     
     <!-- Prompt Enhancement Modal -->
@@ -1796,7 +1440,6 @@ HTML_TEMPLATE = """
     
     <script>
         // Application state
-        let currentUser = null;
         let chatHistory = [];
         let tokenUsage = 0;
         let selectedPromptType = 'enhanced';
@@ -1804,6 +1447,53 @@ HTML_TEMPLATE = """
         let enhancedPrompt = '';
         let attachedFiles = [];
         let isDarkTheme = true;
+        let sessionId = null;
+        
+        // Generate session ID
+        function generateSessionId() {
+            return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        }
+        
+        // Initialize session
+        function initializeSession() {
+            sessionId = localStorage.getItem('sessionId');
+            if (!sessionId) {
+                sessionId = generateSessionId();
+                localStorage.setItem('sessionId', sessionId);
+            }
+            
+            // Load saved chat history
+            const savedHistory = localStorage.getItem('chatHistory');
+            if (savedHistory) {
+                try {
+                    chatHistory = JSON.parse(savedHistory);
+                    displayChatHistory();
+                } catch (e) {
+                    console.error('Error loading chat history:', e);
+                }
+            }
+            
+            // Load token usage
+            const savedTokens = localStorage.getItem('tokenUsage');
+            if (savedTokens) {
+                tokenUsage = parseInt(savedTokens) || 0;
+                updateTokenBar();
+            }
+        }
+        
+        // Display chat history
+        function displayChatHistory() {
+            const container = document.getElementById('messagesContainer');
+            container.innerHTML = `
+                <div class="date-divider">
+                    <span>Today</span>
+                </div>
+            `;
+            
+            chatHistory.forEach(msg => {
+                addMessageToUI(msg.role, msg.content, false);
+            });
+        }
         
         // Initialize particles
         function createParticles() {
@@ -1842,8 +1532,8 @@ HTML_TEMPLATE = """
             }
         }
         
-        // Show notification - Made globally accessible
-        window.showNotification = function(message, type = 'success') {
+        // Show notification
+        function showNotification(message, type = 'success') {
             const notification = document.createElement('div');
             notification.className = `notification ${type}`;
             notification.innerHTML = `
@@ -1858,189 +1548,6 @@ HTML_TEMPLATE = """
             }, 5000);
         }
         
-        // Toggle auth form - Made globally accessible
-        window.toggleAuthForm = function(form) {
-            console.log('Toggling to form:', form);
-            
-            const loginForm = document.getElementById('loginForm');
-            const registerForm = document.getElementById('registerForm');
-            
-            if (!loginForm || !registerForm) {
-                console.error('Forms not found!');
-                return false;
-            }
-            
-            if (form === 'register') {
-                // Show register form
-                loginForm.style.display = 'none';
-                registerForm.style.display = 'block';
-                console.log('Switched to register form');
-            } else {
-                // Show login form
-                loginForm.style.display = 'block';
-                registerForm.style.display = 'none';
-                console.log('Switched to login form');
-            }
-            
-            // Clear any error messages
-            const notifications = document.querySelectorAll('.notification');
-            notifications.forEach(n => n.remove());
-            
-            return false;
-        }
-        
-        // Check password strength
-        function checkPasswordStrength(password) {
-            const strengthBar = document.getElementById('passwordStrength');
-            let strength = 0;
-            
-            if (password.length >= 8) strength++;
-            if (password.match(/[a-z]/) && password.match(/[A-Z]/)) strength++;
-            if (password.match(/[0-9]/)) strength++;
-            if (password.match(/[^a-zA-Z0-9]/)) strength++;
-            
-            strengthBar.className = 'password-strength-fill';
-            if (strength <= 1) {
-                strengthBar.classList.add('weak');
-            } else if (strength === 2) {
-                strengthBar.classList.add('medium');
-            } else {
-                strengthBar.classList.add('strong');
-            }
-        }
-        
-        // Register function
-        async function register(event) {
-            event.preventDefault();
-            
-            const username = document.getElementById('registerUsername').value;
-            const password = document.getElementById('registerPassword').value;
-            const confirmPassword = document.getElementById('confirmPassword').value;
-            
-            if (password !== confirmPassword) {
-                showNotification('Passwords do not match!', 'error');
-                return false;
-            }
-            
-            showLoading();
-            
-            try {
-                const response = await fetch('/register', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        username: username,
-                        password: password
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (response.ok) {
-                    showNotification('Account created successfully! Please login.', 'success');
-                    toggleAuthForm('login');
-                    document.getElementById('registerForm').reset();
-                } else {
-                    showNotification(data.error || 'Registration failed', 'error');
-                }
-            } catch (error) {
-                showNotification('Network error. Please try again.', 'error');
-            } finally {
-                hideLoading();
-            }
-            
-            return false;
-        }
-        
-        // Login function
-        async function login(event) {
-            event.preventDefault();
-            
-            const username = document.getElementById('loginUsername').value;
-            const password = document.getElementById('loginPassword').value;
-            
-            showLoading();
-            
-            try {
-                const response = await fetch('/login', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        username: username,
-                        password: password
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (response.ok) {
-                    currentUser = username;
-                    showNotification('Welcome back, ' + username + '!', 'success');
-                    document.getElementById('authContainer').style.display = 'none';
-                    document.getElementById('chatContainer').style.display = 'flex';
-                    loadChatHistory();
-                } else {
-                    showNotification(data.error || 'Login failed', 'error');
-                }
-            } catch (error) {
-                showNotification('Network error. Please try again.', 'error');
-            } finally {
-                hideLoading();
-            }
-            
-            return false;
-        }
-        
-        // Logout function
-        async function logout() {
-            if (confirm('Are you sure you want to logout?')) {
-                try {
-                    await fetch('/logout', {
-                        method: 'POST'
-                    });
-                    
-                    currentUser = null;
-                    document.getElementById('authContainer').style.display = 'block';
-                    document.getElementById('chatContainer').style.display = 'none';
-                    showNotification('Logged out successfully', 'success');
-                } catch (error) {
-                    console.error('Logout error:', error);
-                }
-            }
-        }
-        
-        // Load chat history
-        async function loadChatHistory() {
-            try {
-                const response = await fetch('/get_chat_history');
-                const data = await response.json();
-                
-                if (data.success) {
-                    chatHistory = data.history || [];
-                    tokenUsage = data.token_usage || 0;
-                    updateTokenBar();
-                    
-                    // Display messages
-                    const container = document.getElementById('messagesContainer');
-                    container.innerHTML = `
-                        <div class="date-divider">
-                            <span>Today</span>
-                        </div>
-                    `;
-                    
-                    chatHistory.forEach(msg => {
-                        addMessageToUI(msg.role, msg.content);
-                    });
-                }
-            } catch (error) {
-                console.error('Error loading chat history:', error);
-            }
-        }
-        
         // Auto-resize textarea
         function autoResizeTextarea() {
             const textarea = document.getElementById('messageInput');
@@ -2050,7 +1557,7 @@ HTML_TEMPLATE = """
         
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('Page loaded - Initializing...');
+            console.log('Initializing Jack\'s AI...');
             
             const messageInput = document.getElementById('messageInput');
             if (messageInput) {
@@ -2072,35 +1579,10 @@ HTML_TEMPLATE = """
             // Initialize
             createParticles();
             loadThemePreference();
-            checkSession();
+            initializeSession();
             
-            // Make sure forms are in correct initial state
-            const loginForm = document.getElementById('loginForm');
-            const registerForm = document.getElementById('registerForm');
-            if (loginForm && registerForm) {
-                loginForm.style.display = 'block';
-                registerForm.style.display = 'none';
-            }
-            
-            console.log('Initialization complete');
+            console.log('Jack\'s AI ready!');
         });
-        
-        // Check session
-        async function checkSession() {
-            try {
-                const response = await fetch('/check_session');
-                const data = await response.json();
-                
-                if (data.logged_in) {
-                    currentUser = data.username;
-                    document.getElementById('authContainer').style.display = 'none';
-                    document.getElementById('chatContainer').style.display = 'flex';
-                    loadChatHistory();
-                }
-            } catch (error) {
-                console.error('Session check error:', error);
-            }
-        }
         
         // Send message
         async function sendMessage() {
@@ -2118,7 +1600,7 @@ HTML_TEMPLATE = """
             
             // Add user message to UI
             if (message) {
-                addMessageToUI('user', message);
+                addMessageToUI('user', message, true);
             }
             
             // Show typing indicator
@@ -2132,7 +1614,8 @@ HTML_TEMPLATE = """
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        prompt: message
+                        prompt: message,
+                        session_id: sessionId
                     })
                 });
                 
@@ -2185,6 +1668,7 @@ HTML_TEMPLATE = """
             
             const formData = new FormData();
             formData.append('message', prompt);
+            formData.append('session_id', sessionId);
             
             // Add files
             for (let file of attachedFiles) {
@@ -2200,9 +1684,12 @@ HTML_TEMPLATE = """
                 const data = await response.json();
                 
                 if (data.success) {
-                    addMessageToUI('assistant', data.response);
+                    addMessageToUI('assistant', data.response, true);
                     tokenUsage = data.token_usage || tokenUsage;
                     updateTokenBar();
+                    
+                    // Save to localStorage
+                    localStorage.setItem('tokenUsage', tokenUsage);
                     
                     if (tokenUsage > 100000) {
                         showNotification('Approaching context limit. Consider starting a new chat.', 'warning');
@@ -2221,7 +1708,7 @@ HTML_TEMPLATE = """
         }
         
         // Add message to UI
-        function addMessageToUI(role, content) {
+        function addMessageToUI(role, content, save = false) {
             const container = document.getElementById('messagesContainer');
             const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
             
@@ -2236,22 +1723,23 @@ HTML_TEMPLATE = """
                         <span class="message-author">${role === 'user' ? 'You' : "Jack's AI"}</span>
                         <span class="message-time">${time}</span>
                     </div>
-                    <div class="message-bubble">${content}</div>
+                    <div class="message-bubble">${content.replace(/\n/g, '<br>')}</div>
                     <div class="message-actions">
                         <button class="message-action" onclick="copyMessage(this)">
                             <i class="fas fa-copy"></i> Copy
                         </button>
-                        ${role === 'assistant' ? `
-                            <button class="message-action" onclick="regenerateMessage(this)">
-                                <i class="fas fa-redo"></i> Regenerate
-                            </button>
-                        ` : ''}
                     </div>
                 </div>
             `;
             
             container.appendChild(messageDiv);
             container.scrollTop = container.scrollHeight;
+            
+            // Save to history
+            if (save) {
+                chatHistory.push({ role, content });
+                localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
+            }
         }
         
         // Copy message
@@ -2348,32 +1836,46 @@ HTML_TEMPLATE = """
         }
         
         // New chat
-        async function newChat() {
+        function newChat() {
             if (confirm('Start a new chat? Current conversation will be saved.')) {
-                try {
-                    const response = await fetch('/new_chat', {
-                        method: 'POST'
-                    });
-                    
-                    if (response.ok) {
-                        chatHistory = [];
-                        tokenUsage = 0;
-                        updateTokenBar();
-                        
-                        const container = document.getElementById('messagesContainer');
-                        container.innerHTML = `
-                            <div class="date-divider">
-                                <span>Today</span>
-                            </div>
-                        `;
-                        
-                        addMessageToUI('assistant', 'New chat started! How can I help you today?');
-                        showNotification('New chat created', 'success');
-                    }
-                } catch (error) {
-                    console.error('Error:', error);
-                    showNotification('Failed to create new chat', 'error');
-                }
+                chatHistory = [];
+                tokenUsage = 0;
+                updateTokenBar();
+                
+                localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
+                localStorage.setItem('tokenUsage', '0');
+                
+                const container = document.getElementById('messagesContainer');
+                container.innerHTML = `
+                    <div class="date-divider">
+                        <span>Today</span>
+                    </div>
+                `;
+                
+                addMessageToUI('assistant', 'New chat started! How can I help you today?', true);
+                showNotification('New chat created', 'success');
+            }
+        }
+        
+        // Clear chat
+        function clearChat() {
+            if (confirm('Clear all messages? This cannot be undone.')) {
+                chatHistory = [];
+                tokenUsage = 0;
+                updateTokenBar();
+                
+                localStorage.removeItem('chatHistory');
+                localStorage.removeItem('tokenUsage');
+                
+                const container = document.getElementById('messagesContainer');
+                container.innerHTML = `
+                    <div class="date-divider">
+                        <span>Today</span>
+                    </div>
+                `;
+                
+                addMessageToUI('assistant', 'Chat cleared! How can I help you today?', false);
+                showNotification('Chat cleared', 'success');
             }
         }
         
@@ -2389,7 +1891,13 @@ HTML_TEMPLATE = """
                 
                 try {
                     const response = await fetch('/compact_chat', {
-                        method: 'POST'
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            session_id: sessionId
+                        })
                     });
                     
                     const data = await response.json();
@@ -2402,9 +1910,15 @@ HTML_TEMPLATE = """
                             </div>
                         `;
                         
-                        addMessageToUI('assistant', 'Chat compacted. Summary:\n\n' + data.summary);
+                        chatHistory = [{ role: 'assistant', content: 'Chat compacted. Summary:\n\n' + data.summary }];
+                        addMessageToUI('assistant', chatHistory[0].content, false);
+                        
                         tokenUsage = data.token_usage || 0;
                         updateTokenBar();
+                        
+                        localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
+                        localStorage.setItem('tokenUsage', tokenUsage);
+                        
                         showNotification('Chat successfully compacted', 'success');
                     } else {
                         showNotification(data.error || 'Failed to compact chat', 'error');
@@ -2461,11 +1975,6 @@ HTML_TEMPLATE = """
         
         function hideLoading() {
             document.getElementById('loadingOverlay').classList.remove('active');
-        }
-        
-        // Regenerate message (placeholder)
-        function regenerateMessage(button) {
-            showNotification('Regenerate feature coming soon!', 'warning');
         }
     </script>
 </body>
@@ -2646,122 +2155,19 @@ def process_file_for_ai(file):
     except Exception as e:
         return f"[Error processing {file.filename}: {str(e)}]", None
 
-# Flask routes
-def login_required(f):
-    """Decorator to check if user is logged in"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'username' not in session:
-            return jsonify({'error': 'Not logged in'}), 401
-        return f(*args, **kwargs)
-    return decorated_function
-
+# Flask routes - No authentication needed
 @app.route('/')
 def index():
     """Main page"""
     return render_template_string(HTML_TEMPLATE)
 
-@app.route('/register', methods=['POST'])
-def register():
-    """Handle user registration"""
-    try:
-        data = request.json
-        username = data.get('username', '').strip()
-        password = data.get('password', '')
-        
-        if not username or not password:
-            return jsonify({'error': 'All fields are required'}), 400
-        
-        if len(username) < 3:
-            return jsonify({'error': 'Username must be at least 3 characters'}), 400
-        
-        if len(password) < 6:
-            return jsonify({'error': 'Password must be at least 6 characters'}), 400
-        
-        if username in USERS_DB:
-            return jsonify({'error': 'Username already exists'}), 400
-        
-        USERS_DB[username] = {
-            'password_hash': generate_password_hash(password),
-            'created_at': datetime.now().isoformat(),
-            'last_login': None
-        }
-        
-        CHAT_SESSIONS[username] = []
-        USER_TOKENS[username] = 0
-        USER_PREFERENCES[username] = {'theme': 'dark'}
-        
-        return jsonify({'success': True, 'message': 'Registration successful'}), 200
-        
-    except Exception as e:
-        print(f"Registration error: {e}")
-        return jsonify({'error': 'Registration failed'}), 500
-
-@app.route('/login', methods=['POST'])
-def login():
-    """Handle user login"""
-    try:
-        data = request.json
-        username = data.get('username', '').strip()
-        password = data.get('password', '')
-        
-        if username not in USERS_DB:
-            return jsonify({'error': 'Invalid username or password'}), 401
-        
-        if not check_password_hash(USERS_DB[username]['password_hash'], password):
-            return jsonify({'error': 'Invalid username or password'}), 401
-        
-        USERS_DB[username]['last_login'] = datetime.now().isoformat()
-        session['username'] = username
-        
-        if username not in CHAT_SESSIONS:
-            CHAT_SESSIONS[username] = []
-        if username not in USER_TOKENS:
-            USER_TOKENS[username] = 0
-        if username not in USER_PREFERENCES:
-            USER_PREFERENCES[username] = {'theme': 'dark'}
-        
-        return jsonify({'success': True, 'message': 'Login successful'}), 200
-        
-    except Exception as e:
-        print(f"Login error: {e}")
-        return jsonify({'error': 'Login failed'}), 500
-
-@app.route('/logout', methods=['POST'])
-@login_required
-def logout():
-    """Handle user logout"""
-    session.clear()
-    return jsonify({'success': True}), 200
-
-@app.route('/check_session', methods=['GET'])
-def check_session():
-    """Check if user is logged in"""
-    if 'username' in session:
-        return jsonify({'logged_in': True, 'username': session['username']}), 200
-    return jsonify({'logged_in': False}), 200
-
-@app.route('/get_chat_history', methods=['GET'])
-@login_required
-def get_chat_history():
-    """Get user's chat history"""
-    username = session['username']
-    history = CHAT_SESSIONS.get(username, [])
-    token_usage = USER_TOKENS.get(username, 0)
-    
-    return jsonify({
-        'success': True,
-        'history': history,
-        'token_usage': token_usage
-    }), 200
-
 @app.route('/enhance_prompt', methods=['POST'])
-@login_required
 def enhance_prompt():
     """Enhance user's prompt using AI"""
     try:
         data = request.json
         original_prompt = data.get('prompt', '')
+        session_id = data.get('session_id', 'default')
         
         if not original_prompt:
             return jsonify({'success': False, 'error': 'No prompt provided'}), 400
@@ -2771,7 +2177,7 @@ def enhance_prompt():
         
         try:
             response = client.chat.completions.create(
-                model="gemini-2.5-flash",  # Changed from 2.0 to 2.5
+                model="gemini-2.5-flash",
                 messages=[
                     {"role": "system", "content": PROMPT_ENHANCER_SYSTEM},
                     {"role": "user", "content": original_prompt}
@@ -2800,13 +2206,21 @@ def enhance_prompt():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/chat', methods=['POST'])
-@login_required
 def chat():
     """Handle chat messages with AI"""
     try:
-        username = session['username']
         message = request.form.get('message', '')
+        session_id = request.form.get('session_id', 'default')
         files = request.files.getlist('files')
+        
+        # Get or create session
+        if session_id not in CHAT_SESSIONS:
+            CHAT_SESSIONS[session_id] = {
+                'history': [],
+                'token_usage': 0
+            }
+        
+        session = CHAT_SESSIONS[session_id]
         
         file_contents = []
         image_data = None
@@ -2822,13 +2236,12 @@ def chat():
         if file_contents:
             full_message += "\n\n" + "\n".join(file_contents)
         
-        chat_history = CHAT_SESSIONS.get(username, [])
-        
         messages = [
             {"role": "system", "content": MAIN_AI_SYSTEM}
         ]
         
-        for msg in chat_history[-10:]:
+        # Add recent history
+        for msg in session['history'][-10:]:
             messages.append({"role": msg['role'], "content": msg['content']})
         
         messages.append({"role": "user", "content": full_message})
@@ -2848,13 +2261,13 @@ def chat():
                 
                 ai_response = response.choices[0].message.content
                 
-                chat_history.append({"role": "user", "content": message})
-                chat_history.append({"role": "assistant", "content": ai_response})
-                CHAT_SESSIONS[username] = chat_history
+                # Update session
+                session['history'].append({"role": "user", "content": message})
+                session['history'].append({"role": "assistant", "content": ai_response})
                 
-                token_usage = USER_TOKENS.get(username, 0)
+                token_usage = session['token_usage']
                 token_usage += count_tokens(full_message) + count_tokens(ai_response)
-                USER_TOKENS[username] = token_usage
+                session['token_usage'] = token_usage
                 
                 return jsonify({
                     'success': True,
@@ -2880,23 +2293,21 @@ def chat():
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route('/new_chat', methods=['POST'])
-@login_required
-def new_chat():
-    """Start a new chat session"""
-    username = session['username']
-    CHAT_SESSIONS[username] = []
-    USER_TOKENS[username] = 0
-    
-    return jsonify({'success': True}), 200
-
 @app.route('/compact_chat', methods=['POST'])
-@login_required
 def compact_chat():
     """Compact the chat history to reduce tokens"""
     try:
-        username = session['username']
-        chat_history = CHAT_SESSIONS.get(username, [])
+        data = request.json
+        session_id = data.get('session_id', 'default')
+        
+        if session_id not in CHAT_SESSIONS:
+            return jsonify({
+                'success': False,
+                'error': 'No chat history found'
+            }), 400
+        
+        session = CHAT_SESSIONS[session_id]
+        chat_history = session['history']
         
         if len(chat_history) < 10:
             return jsonify({
@@ -2914,7 +2325,7 @@ def compact_chat():
         
         try:
             response = client.chat.completions.create(
-                model="gemini-2.5-flash",  # Changed from 2.0 to 2.5
+                model="gemini-2.5-flash",
                 messages=[
                     {"role": "system", "content": CHAT_COMPACTOR_SYSTEM},
                     {"role": "user", "content": f"Please summarize this conversation:\n\n{conversation_text}"}
@@ -2925,12 +2336,13 @@ def compact_chat():
             
             summary = response.choices[0].message.content
             
-            CHAT_SESSIONS[username] = [
+            # Replace history with summary
+            session['history'] = [
                 {"role": "assistant", "content": summary}
             ]
             
             token_usage = count_tokens(summary)
-            USER_TOKENS[username] = token_usage
+            session['token_usage'] = token_usage
             
             return jsonify({
                 'success': True,
