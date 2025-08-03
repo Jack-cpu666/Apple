@@ -105,9 +105,10 @@ def index():
 @app.route("/chat", methods=["POST"])
 def chat():
     data = None
-    try {
+    # --- SYNTAX FIX: Replaced { with : ---
+    try:
         data = request.get_json(force=True)
-    } except Exception as e:
+    except Exception as e:
         print(f"⚠️ Could not parse JSON: {e}")
 
     if not data:
@@ -123,37 +124,33 @@ def chat():
     
     print(f"🔍 Received message: {user_msg}")
 
-    try {
+    # --- SYNTAX FIX: Replaced { with : ---
+    try:
         res = client.chat.completions.create(
             model="gemini-2.5-pro",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
                 {"role": "user", "content": user_msg}
             ],
-            temperature=0.9,
-            # --- CHANGED: max_tokens set to 60,000 as requested ---
+            temperature=0.7,
             max_tokens=60000 
         )
 
-        # --- FIX: Added a robust check for the API response ---
-        # This prevents the 'NoneType' error if the API returns a null content field.
+        # This robust check prevents the original 'NoneType' error
         if res.choices and res.choices[0].message and isinstance(res.choices[0].message.content, str):
             reply = res.choices[0].message.content.strip()
             return jsonify(reply=reply)
         else:
-            # Log the unexpected response for debugging purposes
             print(f"❌ API returned an unexpected or empty response: {res}")
             finish_reason = res.choices[0].finish_reason if res.choices else "unknown"
-            # Provide a more user-friendly error based on the finish reason
             if finish_reason == 'safety':
                  return jsonify(error="The response was blocked due to safety settings."), 500
             return jsonify(error="API returned no valid content."), 500
 
-    } except Exception as e:
+    except Exception as e:
         print(f"❌ An API error occurred in /chat: {e}")
         return jsonify(error=str(e)), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    # Listen on all available network interfaces
     app.run(host="0.0.0.0", port=port)
