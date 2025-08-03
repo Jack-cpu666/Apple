@@ -1509,7 +1509,7 @@ HTML_TEMPLATE = """
         }
         
         // Theme toggle
-        function toggleTheme() {
+        window.toggleTheme = function() {
             isDarkTheme = !isDarkTheme;
             document.documentElement.setAttribute('data-theme', isDarkTheme ? 'dark' : 'light');
             const icon = document.getElementById('themeIcon');
@@ -1533,7 +1533,7 @@ HTML_TEMPLATE = """
         }
         
         // Show notification
-        function showNotification(message, type = 'success') {
+        window.showNotification = function(message, type = 'success') {
             const notification = document.createElement('div');
             notification.className = `notification ${type}`;
             notification.innerHTML = `
@@ -1555,59 +1555,8 @@ HTML_TEMPLATE = """
             textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px';
         }
         
-        // Initialize on page load
-        document.addEventListener('DOMContentLoaded', function() {
-            console.log('Initializing Jack\'s AI...');
-            
-            // Define all functions globally before use
-            window.sendMessage = sendMessage;
-            window.toggleFileUpload = toggleFileUpload;
-            window.toggleVoiceInput = toggleVoiceInput;
-            window.handleFileSelect = handleFileSelect;
-            window.removeFile = removeFile;
-            window.insertPrompt = insertPrompt;
-            window.newChat = newChat;
-            window.clearChat = clearChat;
-            window.compactChat = compactChat;
-            window.exportChat = exportChat;
-            window.toggleTheme = toggleTheme;
-            window.copyMessage = copyMessage;
-            window.selectPromptOption = selectPromptOption;
-            window.closePromptModal = closePromptModal;
-            window.confirmPromptSelection = confirmPromptSelection;
-            window.showNotification = showNotification;
-            window.showLoading = showLoading;
-            window.hideLoading = hideLoading;
-            
-            const messageInput = document.getElementById('messageInput');
-            if (messageInput) {
-                messageInput.addEventListener('input', autoResizeTextarea);
-                messageInput.addEventListener('keydown', function(e) {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        sendMessage();
-                    }
-                });
-            }
-            
-            // File input handler
-            const fileInput = document.getElementById('fileInput');
-            if (fileInput) {
-                fileInput.addEventListener('change', function(e) {
-                    handleFileSelect(e);
-                });
-            }
-            
-            // Initialize
-            createParticles();
-            loadThemePreference();
-            initializeSession();
-            
-            console.log('Jack\'s AI ready!');
-        });
-        
         // Send message
-        async function sendMessage() {
+        window.sendMessage = async function() {
             const messageInput = document.getElementById('messageInput');
             const message = messageInput.value.trim();
             
@@ -1665,20 +1614,20 @@ HTML_TEMPLATE = """
         }
         
         // Select prompt option
-        function selectPromptOption(type) {
+        window.selectPromptOption = function(type) {
             selectedPromptType = type;
             document.getElementById('originalOption').classList.toggle('selected', type === 'original');
             document.getElementById('enhancedOption').classList.toggle('selected', type === 'enhanced');
         }
         
         // Close prompt modal
-        function closePromptModal() {
+        window.closePromptModal = function() {
             document.getElementById('promptModal').classList.remove('active');
             document.getElementById('sendButton').disabled = false;
         }
         
         // Confirm prompt selection
-        async function confirmPromptSelection() {
+        window.confirmPromptSelection = async function() {
             closePromptModal();
             const promptToUse = selectedPromptType === 'original' ? currentPrompt : enhancedPrompt;
             await processMessage(promptToUse);
@@ -1769,7 +1718,7 @@ HTML_TEMPLATE = """
         }
         
         // Copy message
-        function copyMessage(button) {
+        window.copyMessage = function(button) {
             const content = button.closest('.message-content-wrapper').querySelector('.message-bubble').textContent;
             navigator.clipboard.writeText(content);
             showNotification('Message copied to clipboard', 'success');
@@ -1791,7 +1740,7 @@ HTML_TEMPLATE = """
         }
         
         // Toggle file upload
-        function toggleFileUpload() {
+        window.toggleFileUpload = function() {
             const fileSection = document.getElementById('fileUploadSection');
             if (fileSection.classList.contains('active')) {
                 fileSection.classList.remove('active');
@@ -1802,7 +1751,7 @@ HTML_TEMPLATE = """
         }
         
         // Handle file select
-        function handleFileSelect(event) {
+        window.handleFileSelect = function(event) {
             const files = event.target.files;
             const preview = document.getElementById('filesPreview');
             
@@ -1833,7 +1782,7 @@ HTML_TEMPLATE = """
         }
         
         // Remove file
-        function removeFile(fileName) {
+        window.removeFile = function(fileName) {
             attachedFiles = attachedFiles.filter(f => f.name !== fileName);
             
             const preview = document.getElementById('filesPreview');
@@ -1862,7 +1811,7 @@ HTML_TEMPLATE = """
         }
         
         // New chat
-        function newChat() {
+        window.newChat = function() {
             if (confirm('Start a new chat? Current conversation will be saved.')) {
                 chatHistory = [];
                 tokenUsage = 0;
@@ -1884,7 +1833,7 @@ HTML_TEMPLATE = """
         }
         
         // Clear chat
-        function clearChat() {
+        window.clearChat = function() {
             if (confirm('Clear all messages? This cannot be undone.')) {
                 chatHistory = [];
                 tokenUsage = 0;
@@ -1906,7 +1855,7 @@ HTML_TEMPLATE = """
         }
         
         // Compact chat
-        async function compactChat() {
+        window.compactChat = async function() {
             if (chatHistory.length < 10) {
                 showNotification('Chat is too short to compact', 'warning');
                 return;
@@ -1959,7 +1908,7 @@ HTML_TEMPLATE = """
         }
         
         // Export chat
-        function exportChat() {
+        window.exportChat = function() {
             const messages = document.querySelectorAll('.message');
             let exportText = 'Jack\'s AI Chat Export\n';
             exportText += '========================\n\n';
@@ -1982,7 +1931,7 @@ HTML_TEMPLATE = """
         }
         
         // Insert prompt
-        function insertPrompt(text) {
+        window.insertPrompt = function(text) {
             const input = document.getElementById('messageInput');
             input.value = text + ' ';
             input.focus();
@@ -1990,7 +1939,7 @@ HTML_TEMPLATE = """
         }
         
         // Toggle voice input (placeholder)
-        function toggleVoiceInput() {
+        window.toggleVoiceInput = function() {
             showNotification('Voice input coming soon!', 'warning');
         }
         
@@ -2002,6 +1951,29 @@ HTML_TEMPLATE = """
         function hideLoading() {
             document.getElementById('loadingOverlay').classList.remove('active');
         }
+        
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Initializing Jack\'s AI...');
+            
+            const messageInput = document.getElementById('messageInput');
+            if (messageInput) {
+                messageInput.addEventListener('input', autoResizeTextarea);
+                messageInput.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        sendMessage();
+                    }
+                });
+            }
+            
+            // Initialize
+            createParticles();
+            loadThemePreference();
+            initializeSession();
+            
+            console.log('Jack\'s AI ready!');
+        });
     </script>
 </body>
 </html>
