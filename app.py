@@ -1469,6 +1469,8 @@ HTML_TEMPLATE = """
                 return;
             }
             
+            console.log('Sending message:', message);
+            
             currentPrompt = message;
             messageInput.value = '';
             autoResizeTextarea();
@@ -1481,28 +1483,44 @@ HTML_TEMPLATE = """
             document.getElementById('typingIndicator').classList.add('active');
             
             try {
-                const enhanceResponse = await fetch('/enhance_prompt', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        prompt: message,
-                        session_id: sessionId
-                    })
-                });
+                const skipEnhancement = false;
                 
-                const enhanceData = await enhanceResponse.json();
-                
-                if (enhanceData.success) {
-                    enhancedPrompt = enhanceData.enhanced_prompt;
-                    showPromptModal(message, enhancedPrompt);
-                } else {
+                if (skipEnhancement || message.length < 10) {
                     await processMessage(message);
+                } else {
+                    try {
+                        const enhanceResponse = await fetch('/enhance_prompt', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                prompt: message,
+                                session_id: sessionId
+                            })
+                        });
+                        
+                        if (enhanceResponse.ok) {
+                            const enhanceData = await enhanceResponse.json();
+                            if (enhanceData.success && enhanceData.enhanced_prompt !== message) {
+                                enhancedPrompt = enhanceData.enhanced_prompt;
+                                showPromptModal(message, enhancedPrompt);
+                            } else {
+                                await processMessage(message);
+                            }
+                        } else {
+                            await processMessage(message);
+                        }
+                    } catch (enhanceError) {
+                        console.error('Enhancement failed:', enhanceError);
+                        await processMessage(message);
+                    }
                 }
             } catch (error) {
-                console.error('Error:', error);
-                await processMessage(message);
+                console.error('Send message error:', error);
+                document.getElementById('typingIndicator').classList.remove('active');
+                document.getElementById('sendBtn').disabled = false;
+                showNotification('Failed to send message. Please try again.', 'error');
             }
         }
 
@@ -1532,6 +1550,7 @@ HTML_TEMPLATE = """
         }
 
         async function processMessage(prompt) {
+            console.log('Processing message:', prompt);
             document.getElementById('typingIndicator').classList.add('active');
             
             const formData = new FormData();
@@ -1548,16 +1567,26 @@ HTML_TEMPLATE = """
                     body: formData
                 });
                 
+                console.log('Response status:', response.status);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
                 const data = await response.json();
+                console.log('Response data:', data);
                 
                 if (data.success) {
                     addMessageToUI('assistant', data.response, true);
                 } else {
-                    showNotification(data.error || 'Failed to get response', 'error');
+                    const errorMsg = data.error || 'Failed to get response. Please check your API configuration.';
+                    showNotification(errorMsg, 'error');
+                    addMessageToUI('assistant', 'I apologize, but I encountered an error. Please make sure the API keys are properly configured in the backend.', false);
                 }
             } catch (error) {
-                console.error('Error:', error);
-                showNotification('Network error. Please try again.', 'error');
+                console.error('Chat error:', error);
+                showNotification('Connection error. Please check if the server is running.', 'error');
+                addMessageToUI('assistant', 'I apologize, but I cannot connect to the server. Please ensure:\n1. The Flask server is running\n2. API keys are properly configured\n3. Your internet connection is stable', false);
             } finally {
                 document.getElementById('typingIndicator').classList.remove('active');
                 document.getElementById('sendBtn').disabled = false;
@@ -1752,25 +1781,29 @@ def get_api_keys():
     global API_KEYS
     for i in range(1, 11):
         key = os.environ.get(f'GEMINI_API_KEY_{i}')
-        if key:
+        if key and key != "YOUR_API_KEY_HERE":
             API_KEYS.append(key)
             API_KEYS_STATUS[key] = {'failures': 0, 'last_used': None}
     
     if not API_KEYS:
         default_key = os.environ.get('GEMINI_API_KEY')
-        if default_key:
+        if default_key and default_key != "YOUR_API_KEY_HERE":
             API_KEYS.append(default_key)
             API_KEYS_STATUS[default_key] = {'failures': 0, 'last_used': None}
     
     if not API_KEYS:
         print("WARNING: No API keys found! Please set GEMINI_API_KEY environment variables.")
-        API_KEYS.append("YOUR_API_KEY_HERE")
+        print("To set an API key, use: export GEMINI_API_KEY='your-actual-api-key'")
+        API_KEYS.append("demo_mode")
 
 def get_next_api_key():
     global current_key_index
     
     if not API_KEYS:
         get_api_keys()
+    
+    if API_KEYS and API_KEYS[0] == "demo_mode":
+        return "demo_mode"
     
     attempts = 0
     while attempts < len(API_KEYS):
@@ -1787,10 +1820,10 @@ def get_next_api_key():
     for key in API_KEYS:
         API_KEYS_STATUS[key]['failures'] = 0
     
-    return API_KEYS[0] if API_KEYS else "YOUR_API_KEY_HERE"
+    return API_KEYS[0] if API_KEYS else "demo_mode"
 
 def mark_api_key_failure(api_key):
-    if api_key in API_KEYS_STATUS:
+    if api_key in API_KEYS_STATUS and api_key != "demo_mode":
         API_KEYS_STATUS[api_key]['failures'] += 1
 
 PROMPT_ENHANCER_SYSTEM = """You are a prompt enhancement specialist. Your job is to take user prompts and make them clearer, more detailed, and more effective for an AI assistant.
@@ -1926,6 +1959,13 @@ def enhance_prompt():
             return jsonify({'success': False, 'error': 'No prompt provided'}), 400
         
         api_key = get_next_api_key()
+        
+        if api_key == "demo_mode":
+            return jsonify({
+                'success': True,
+                'enhanced_prompt': original_prompt
+            }), 200
+        
         client = create_ai_client(api_key)
         
         try:
@@ -1973,6 +2013,29 @@ def chat():
         
         session = CHAT_SESSIONS[session_id]
         
+        api_key = get_next_api_key()
+        
+        if api_key == "demo_mode":
+            demo_response = f"""I received your message: "{message}"
+
+However, I'm currently in demo mode because no API keys are configured. To enable full functionality:
+
+1. Get a Gemini API key from Google AI Studio
+2. Set it as an environment variable:
+   export GEMINI_API_KEY='your-actual-api-key'
+3. Restart the Flask application
+
+Once configured, I'll be able to provide intelligent responses, analyze documents, generate code, and much more!"""
+            
+            session['history'].append({"role": "user", "content": message})
+            session['history'].append({"role": "assistant", "content": demo_response})
+            
+            return jsonify({
+                'success': True,
+                'response': demo_response,
+                'token_usage': 0
+            }), 200
+        
         file_contents = []
         image_data = None
         
@@ -1996,7 +2059,6 @@ def chat():
         
         messages.append({"role": "user", "content": full_message})
         
-        api_key = get_next_api_key()
         client = create_ai_client(api_key)
         
         max_retries = 3
@@ -2030,12 +2092,19 @@ def chat():
                 
                 if attempt < max_retries - 1:
                     api_key = get_next_api_key()
+                    if api_key == "demo_mode":
+                        break
                     client = create_ai_client(api_key)
                 else:
                     return jsonify({
                         'success': False,
-                        'error': 'AI service temporarily unavailable. Please try again.'
+                        'error': 'API key configuration error. Please check your Gemini API keys.'
                     }), 500
+        
+        return jsonify({
+            'success': False,
+            'error': 'Failed to connect to AI service. Please check API configuration.'
+        }), 500
         
     except Exception as e:
         print(f"Chat error: {e}")
@@ -2110,7 +2179,13 @@ def compact_chat():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 get_api_keys()
+print(f"Initialized with {len(API_KEYS)} API key(s)")
+if API_KEYS and API_KEYS[0] == "demo_mode":
+    print("Running in DEMO MODE - No API keys configured")
+    print("To use the full AI features, set your Gemini API key:")
+    print("  export GEMINI_API_KEY='your-actual-api-key'")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
+    print(f"Starting Jack AI Beta on http://localhost:{port}")
     app.run(host='0.0.0.0', port=port, debug=False)
