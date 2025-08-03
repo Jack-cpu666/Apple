@@ -24,6 +24,13 @@ API_KEYS = [
 # Filter out None values in case not all 10 keys are set
 API_KEYS = [key for key in API_KEYS if key]
 
+# Check if at least one API key is configured
+if not API_KEYS:
+    print("WARNING: No GEMINI_API_KEY environment variable found!")
+    print("Please set at least GEMINI_API_KEY in your environment variables.")
+else:
+    print(f"Loaded {len(API_KEYS)} API key(s) successfully")
+
 # Keep track of which API key to use next
 current_api_key_index = 0
 
@@ -35,13 +42,14 @@ def get_next_api_client(model_type="pro"):
     global current_api_key_index
     
     if not API_KEYS:
-        raise Exception("No API keys configured")
+        raise Exception("No API keys configured. Please set GEMINI_API_KEY environment variable.")
     
     # Get the next API key in rotation
     api_key = API_KEYS[current_api_key_index % len(API_KEYS)]
     current_api_key_index += 1
     
-    # Create client with the selected API key
+    # Create client with minimal parameters to avoid proxy issues
+    # Using exact same format as the working example
     client = OpenAI(
         api_key=api_key,
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -1228,14 +1236,18 @@ Simply return the improved prompt without any explanation or meta-commentary."""
                     return jsonify({"improved_prompt": improved})
                     
             except Exception as api_error:
-                print(f"API attempt {attempt + 1} failed: {api_error}")
+                print(f"API attempt {attempt + 1} failed in improve_prompt: {str(api_error)}")
+                # Log the full traceback for debugging
+                traceback.print_exc()
                 continue
         
         # If all attempts fail, return original
+        print("All API attempts failed in improve_prompt, returning original prompt")
         return jsonify({"improved_prompt": user_prompt})
         
     except Exception as e:
         print(f"Error in improve_prompt: {e}")
+        traceback.print_exc()
         return jsonify({"improved_prompt": data.get("prompt", "")})
 
 @app.route("/chat", methods=["POST"])
@@ -1323,7 +1335,7 @@ Remember: Use as many tokens as needed. Length and completeness are valued over 
             try:
                 client = get_next_api_client(model_type="pro")
                 response = client.chat.completions.create(
-                    model="gemini-2.0-flash-exp",  # Using Gemini 2.5 Pro equivalent
+                    model="gemini-1.5-pro",  # Using Gemini 1.5 Pro for main responses
                     messages=messages,
                     temperature=0.7,
                     max_tokens=60000  # Maximum tokens for detailed responses
@@ -1349,11 +1361,14 @@ Remember: Use as many tokens as needed. Length and completeness are valued over 
                     })
                     
             except Exception as api_error:
-                print(f"API attempt {attempt + 1} failed: {api_error}")
+                print(f"API attempt {attempt + 1} failed in chat: {str(api_error)}")
+                # Log the full traceback for debugging
+                traceback.print_exc()
                 time.sleep(1)  # Brief delay before retry
                 continue
         
         # If all attempts fail
+        print("All API attempts failed in chat endpoint")
         return jsonify({"error": "Unable to process request. Please try again."}), 500
         
     except Exception as e:
