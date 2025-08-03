@@ -1702,7 +1702,7 @@ HTML_TEMPLATE = """
                 
                 <div class="form-toggle">
                     Don't have an account? 
-                    <a href="#" onclick="toggleAuthForm('register')">Create one</a>
+                    <a href="javascript:void(0)" onclick="toggleAuthForm('register'); return false;">Create one</a>
                 </div>
             </div>
             
@@ -1756,7 +1756,7 @@ HTML_TEMPLATE = """
                 
                 <div class="form-toggle">
                     Already have an account? 
-                    <a href="#" onclick="toggleAuthForm('login')">Sign in</a>
+                    <a href="javascript:void(0)" onclick="toggleAuthForm('login'); return false;">Sign in</a>
                 </div>
             </div>
         </div>
@@ -1842,8 +1842,8 @@ HTML_TEMPLATE = """
             }
         }
         
-        // Show notification
-        function showNotification(message, type = 'success') {
+        // Show notification - Made globally accessible
+        window.showNotification = function(message, type = 'success') {
             const notification = document.createElement('div');
             notification.className = `notification ${type}`;
             notification.innerHTML = `
@@ -1858,15 +1858,35 @@ HTML_TEMPLATE = """
             }, 5000);
         }
         
-        // Toggle auth form
-        function toggleAuthForm(form) {
-            if (form === 'register') {
-                document.getElementById('loginForm').style.display = 'none';
-                document.getElementById('registerForm').style.display = 'block';
-            } else {
-                document.getElementById('loginForm').style.display = 'block';
-                document.getElementById('registerForm').style.display = 'none';
+        // Toggle auth form - Made globally accessible
+        window.toggleAuthForm = function(form) {
+            console.log('Toggling to form:', form);
+            
+            const loginForm = document.getElementById('loginForm');
+            const registerForm = document.getElementById('registerForm');
+            
+            if (!loginForm || !registerForm) {
+                console.error('Forms not found!');
+                return false;
             }
+            
+            if (form === 'register') {
+                // Show register form
+                loginForm.style.display = 'none';
+                registerForm.style.display = 'block';
+                console.log('Switched to register form');
+            } else {
+                // Show login form
+                loginForm.style.display = 'block';
+                registerForm.style.display = 'none';
+                console.log('Switched to login form');
+            }
+            
+            // Clear any error messages
+            const notifications = document.querySelectorAll('.notification');
+            notifications.forEach(n => n.remove());
+            
+            return false;
         }
         
         // Check password strength
@@ -2028,8 +2048,10 @@ HTML_TEMPLATE = """
             textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px';
         }
         
-        // Handle input
+        // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
+            console.log('Page loaded - Initializing...');
+            
             const messageInput = document.getElementById('messageInput');
             if (messageInput) {
                 messageInput.addEventListener('input', autoResizeTextarea);
@@ -2042,12 +2064,25 @@ HTML_TEMPLATE = """
             }
             
             // File input handler
-            document.getElementById('fileInput').addEventListener('change', handleFileSelect);
+            const fileInput = document.getElementById('fileInput');
+            if (fileInput) {
+                fileInput.addEventListener('change', handleFileSelect);
+            }
             
             // Initialize
             createParticles();
             loadThemePreference();
             checkSession();
+            
+            // Make sure forms are in correct initial state
+            const loginForm = document.getElementById('loginForm');
+            const registerForm = document.getElementById('registerForm');
+            if (loginForm && registerForm) {
+                loginForm.style.display = 'block';
+                registerForm.style.display = 'none';
+            }
+            
+            console.log('Initialization complete');
         });
         
         // Check session
