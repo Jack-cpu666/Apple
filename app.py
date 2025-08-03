@@ -1549,7 +1549,7 @@ HTML_TEMPLATE = """
         }
         
         // Auto-resize textarea
-        function autoResizeTextarea() {
+        window.autoResizeTextarea = function() {
             const textarea = document.getElementById('messageInput');
             textarea.style.height = 'auto';
             textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px';
@@ -1566,12 +1566,12 @@ HTML_TEMPLATE = """
             
             currentPrompt = message;
             messageInput.value = '';
-            autoResizeTextarea();
+            window.autoResizeTextarea();
             document.getElementById('sendButton').disabled = true;
             
             // Add user message to UI
             if (message) {
-                addMessageToUI('user', message, true);
+                window.addMessageToUI('user', message, true);
             }
             
             // Show typing indicator
@@ -1594,18 +1594,18 @@ HTML_TEMPLATE = """
                 
                 if (enhanceData.success) {
                     enhancedPrompt = enhanceData.enhanced_prompt;
-                    showPromptModal(message, enhancedPrompt);
+                    window.showPromptModal(message, enhancedPrompt);
                 } else {
-                    await processMessage(message);
+                    await window.processMessage(message);
                 }
             } catch (error) {
                 console.error('Error:', error);
-                await processMessage(message);
+                await window.processMessage(message);
             }
         }
         
         // Show prompt modal
-        function showPromptModal(original, enhanced) {
+        window.showPromptModal = function(original, enhanced) {
             document.getElementById('originalPromptText').textContent = original;
             document.getElementById('enhancedPromptText').textContent = enhanced;
             document.getElementById('promptModal').classList.add('active');
@@ -1628,9 +1628,9 @@ HTML_TEMPLATE = """
         
         // Confirm prompt selection
         window.confirmPromptSelection = async function() {
-            closePromptModal();
+            window.closePromptModal();
             const promptToUse = selectedPromptType === 'original' ? currentPrompt : enhancedPrompt;
-            await processMessage(promptToUse);
+            await window.processMessage(promptToUse);
         }
         
         // Process message
@@ -1655,22 +1655,22 @@ HTML_TEMPLATE = """
                 const data = await response.json();
                 
                 if (data.success) {
-                    addMessageToUI('assistant', data.response, true);
+                    window.addMessageToUI('assistant', data.response, true);
                     tokenUsage = data.token_usage || tokenUsage;
-                    updateTokenBar();
+                    window.updateTokenBar();
                     
                     // Save to localStorage
                     localStorage.setItem('tokenUsage', tokenUsage);
                     
                     if (tokenUsage > 100000) {
-                        showNotification('Approaching context limit. Consider starting a new chat.', 'warning');
+                        window.showNotification('Approaching context limit. Consider starting a new chat.', 'warning');
                     }
                 } else {
-                    showNotification(data.error || 'Failed to get response', 'error');
+                    window.showNotification(data.error || 'Failed to get response', 'error');
                 }
             } catch (error) {
                 console.error('Error:', error);
-                showNotification('Network error. Please try again.', 'error');
+                window.showNotification('Network error. Please try again.', 'error');
             } finally {
                 document.getElementById('typingIndicator').classList.remove('active');
                 document.getElementById('sendButton').disabled = false;
@@ -1721,7 +1721,7 @@ HTML_TEMPLATE = """
         window.copyMessage = function(button) {
             const content = button.closest('.message-content-wrapper').querySelector('.message-bubble').textContent;
             navigator.clipboard.writeText(content);
-            showNotification('Message copied to clipboard', 'success');
+            window.showNotification('Message copied to clipboard', 'success');
         }
         
         // Update token bar
@@ -1757,7 +1757,7 @@ HTML_TEMPLATE = """
             
             for (let file of files) {
                 if (file.size > 100 * 1024 * 1024) {
-                    showNotification(`File ${file.name} is too large. Max size is 100MB.`, 'error');
+                    window.showNotification(`File ${file.name} is too large. Max size is 100MB.`, 'error');
                     continue;
                 }
                 
@@ -1765,11 +1765,25 @@ HTML_TEMPLATE = """
                 
                 const fileItem = document.createElement('div');
                 fileItem.className = 'file-preview-item';
-                fileItem.innerHTML = `
-                    <i class="fas fa-file"></i>
-                    <span>${file.name}</span>
-                    <i class="fas fa-times file-remove" onclick="window.removeFile('${file.name.replace(/'/g, "\\'")}')" style="cursor: pointer;"></i>
-                `;
+                
+                const fileIcon = document.createElement('i');
+                fileIcon.className = 'fas fa-file';
+                
+                const fileName = document.createElement('span');
+                fileName.textContent = file.name;
+                fileName.style.marginLeft = '8px';
+                fileName.style.marginRight = '8px';
+                
+                const removeBtn = document.createElement('i');
+                removeBtn.className = 'fas fa-times file-remove';
+                removeBtn.style.cursor = 'pointer';
+                removeBtn.onclick = function() {
+                    window.removeFile(file.name);
+                };
+                
+                fileItem.appendChild(fileIcon);
+                fileItem.appendChild(fileName);
+                fileItem.appendChild(removeBtn);
                 
                 preview.appendChild(fileItem);
             }
@@ -1815,7 +1829,7 @@ HTML_TEMPLATE = """
             if (confirm('Start a new chat? Current conversation will be saved.')) {
                 chatHistory = [];
                 tokenUsage = 0;
-                updateTokenBar();
+                window.updateTokenBar();
                 
                 localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
                 localStorage.setItem('tokenUsage', '0');
@@ -1827,8 +1841,8 @@ HTML_TEMPLATE = """
                     </div>
                 `;
                 
-                addMessageToUI('assistant', 'New chat started! How can I help you today?', true);
-                showNotification('New chat created', 'success');
+                window.addMessageToUI('assistant', 'New chat started! How can I help you today?', true);
+                window.showNotification('New chat created', 'success');
             }
         }
         
@@ -1837,7 +1851,7 @@ HTML_TEMPLATE = """
             if (confirm('Clear all messages? This cannot be undone.')) {
                 chatHistory = [];
                 tokenUsage = 0;
-                updateTokenBar();
+                window.updateTokenBar();
                 
                 localStorage.removeItem('chatHistory');
                 localStorage.removeItem('tokenUsage');
@@ -1849,20 +1863,20 @@ HTML_TEMPLATE = """
                     </div>
                 `;
                 
-                addMessageToUI('assistant', 'Chat cleared! How can I help you today?', false);
-                showNotification('Chat cleared', 'success');
+                window.addMessageToUI('assistant', 'Chat cleared! How can I help you today?', false);
+                window.showNotification('Chat cleared', 'success');
             }
         }
         
         // Compact chat
         window.compactChat = async function() {
             if (chatHistory.length < 10) {
-                showNotification('Chat is too short to compact', 'warning');
+                window.showNotification('Chat is too short to compact', 'warning');
                 return;
             }
             
             if (confirm('Compact this conversation to reduce token usage?')) {
-                showLoading();
+                window.showLoading();
                 
                 try {
                     const response = await fetch('/compact_chat', {
@@ -1886,23 +1900,23 @@ HTML_TEMPLATE = """
                         `;
                         
                         chatHistory = [{ role: 'assistant', content: 'Chat compacted. Summary:\n\n' + data.summary }];
-                        addMessageToUI('assistant', chatHistory[0].content, false);
+                        window.addMessageToUI('assistant', chatHistory[0].content, false);
                         
                         tokenUsage = data.token_usage || 0;
-                        updateTokenBar();
+                        window.updateTokenBar();
                         
                         localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
                         localStorage.setItem('tokenUsage', tokenUsage);
                         
-                        showNotification('Chat successfully compacted', 'success');
+                        window.showNotification('Chat successfully compacted', 'success');
                     } else {
-                        showNotification(data.error || 'Failed to compact chat', 'error');
+                        window.showNotification(data.error || 'Failed to compact chat', 'error');
                     }
                 } catch (error) {
                     console.error('Error:', error);
-                    showNotification('Failed to compact chat', 'error');
+                    window.showNotification('Failed to compact chat', 'error');
                 } finally {
-                    hideLoading();
+                    window.hideLoading();
                 }
             }
         }
@@ -1927,7 +1941,7 @@ HTML_TEMPLATE = """
             a.download = `chat-export-${new Date().toISOString()}.txt`;
             a.click();
             
-            showNotification('Chat exported successfully', 'success');
+            window.showNotification('Chat exported successfully', 'success');
         }
         
         // Insert prompt
@@ -1935,20 +1949,20 @@ HTML_TEMPLATE = """
             const input = document.getElementById('messageInput');
             input.value = text + ' ';
             input.focus();
-            autoResizeTextarea();
+            window.autoResizeTextarea();
         }
         
         // Toggle voice input (placeholder)
         window.toggleVoiceInput = function() {
-            showNotification('Voice input coming soon!', 'warning');
+            window.showNotification('Voice input coming soon!', 'warning');
         }
         
         // Show/hide loading
-        function showLoading() {
+        window.showLoading = function() {
             document.getElementById('loadingOverlay').classList.add('active');
         }
         
-        function hideLoading() {
+        window.hideLoading = function() {
             document.getElementById('loadingOverlay').classList.remove('active');
         }
         
@@ -1958,11 +1972,11 @@ HTML_TEMPLATE = """
             
             const messageInput = document.getElementById('messageInput');
             if (messageInput) {
-                messageInput.addEventListener('input', autoResizeTextarea);
+                messageInput.addEventListener('input', window.autoResizeTextarea);
                 messageInput.addEventListener('keydown', function(e) {
                     if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
-                        sendMessage();
+                        window.sendMessage();
                     }
                 });
             }
