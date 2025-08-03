@@ -4,13 +4,14 @@ from openai import OpenAI
 
 app = Flask(__name__)
 
-# Initialize Gemini‐compatible client
+# Initialize Gemini-compatible client
+# Make sure your GEMINI_API_KEY is set in your environment variables
 client = OpenAI(
     api_key=os.getenv("GEMINI_API_KEY"),
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
 )
 
-# Inline HTML (Bootstrap 5)
+# Inline HTML with Bootstrap 5 for the frontend
 HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -56,7 +57,9 @@ HTML = """
     function append(role, text) {
       const div = document.createElement('div');
       div.className = 'msg ' + (role==='user'?'user':'assist');
-      div.innerHTML = `<div class="bubble">${text}</div>`;
+      // Basic security: escape HTML to prevent injection from model response
+      const safeText = text.replace(/</g, "<").replace(/>/g, ">");
+      div.innerHTML = `<div class="bubble">${safeText}</div>`;
       chatEl.appendChild(div);
       chatEl.scrollTop = chatEl.scrollHeight;
     }
@@ -75,7 +78,7 @@ HTML = """
           body: JSON.stringify({message: msg})
         });
         const json = await res.json();
-        chatEl.lastChild.remove();  // remove “thinking” bubble
+        chatEl.lastChild.remove(); // remove “thinking” bubble
         if (json.reply) {
           append('assist', json.reply);
         } else {
@@ -101,44 +104,56 @@ def index():
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    # Attempt to parse JSON
     data = None
-    try:
+    try {
         data = request.get_json(force=True)
-    except Exception as e:
-        print("⚠️ get_json error:", e)
+    } except Exception as e:
+        print(f"⚠️ Could not parse JSON: {e}")
 
-    # Fallback to form data if JSON failed
     if not data:
         data = request.form.to_dict()
 
-    # Log incoming payload for debugging
-    print("🔍 /chat payload data:", data)
+    if not data or "message" not in data:
+        return jsonify(error="Invalid request. No message found."), 400
 
-    # Safely extract and clean the user message
     raw_msg = data.get("message")
     user_msg = raw_msg.strip() if isinstance(raw_msg, str) else ""
     if not user_msg:
-        return jsonify(error="No message provided"), 400
+        return jsonify(error="Message cannot be empty."), 400
+    
+    print(f"🔍 Received message: {user_msg}")
 
-    # Call Gemini 2.5 Pro
-    try:
+    try {
         res = client.chat.completions.create(
             model="gemini-2.5-pro",
             messages=[
-                {"role":"system",    "content":"You are a helpful assistant."},
-                {"role":"user",      "content":user_msg}
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": user_msg}
             ],
-            temperature=0.7,
-            max_tokens=800
+            temperature=0.9,
+            # --- CHANGED: max_tokens set to 60,000 as requested ---
+            max_tokens=60000 
         )
-        reply = res.choices[0].message.content.strip()
-        return jsonify(reply=reply)
-    except Exception as e:
-        print("❌ API error in /chat:", e)
+
+        # --- FIX: Added a robust check for the API response ---
+        # This prevents the 'NoneType' error if the API returns a null content field.
+        if res.choices and res.choices[0].message and isinstance(res.choices[0].message.content, str):
+            reply = res.choices[0].message.content.strip()
+            return jsonify(reply=reply)
+        else:
+            # Log the unexpected response for debugging purposes
+            print(f"❌ API returned an unexpected or empty response: {res}")
+            finish_reason = res.choices[0].finish_reason if res.choices else "unknown"
+            # Provide a more user-friendly error based on the finish reason
+            if finish_reason == 'safety':
+                 return jsonify(error="The response was blocked due to safety settings."), 500
+            return jsonify(error="API returned no valid content."), 500
+
+    } except Exception as e:
+        print(f"❌ An API error occurred in /chat: {e}")
         return jsonify(error=str(e)), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    # Listen on all interfaces so your iPhone (or Render) can reach it
+    # Listen on all available network interfaces
     app.run(host="0.0.0.0", port=port)
