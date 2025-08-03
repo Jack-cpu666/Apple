@@ -1,396 +1,2370 @@
+"""
+Jack's AI - Ultra Modern Web Application (No Authentication)
+Open access version - No login required
+Author: Jack's AI System
+Version: 3.0.0
+"""
+
 import os
 import json
 import base64
-import mimetypes
-import traceback
-from datetime import datetime
-from flask import Flask, render_template_string, request, jsonify, session
-from openai import OpenAI
+import hashlib
 import secrets
-import time
+import traceback
+from datetime import datetime, timedelta
+from functools import wraps
+from io import BytesIO
+import mimetypes
+import random
+import string
 
-# --- App Initialization ---
+# Import Flask and related libraries for web framework
+from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for, make_response
+from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
+
+# Import OpenAI library to interact with Gemini API
+from openai import OpenAI
+from PIL import Image  # For image processing
+import PyPDF2  # For PDF processing
+import docx  # For Word document processing
+import openpyxl  # For Excel processing
+
+# Initialize Flask application
 app = Flask(__name__)
-# Generate a secure secret key for sessions, essential for production
 app.secret_key = secrets.token_hex(32)
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # Max file size: 100MB
 
-# --- In-memory Conversation Storage ---
-# Note: This will reset if your Render instance restarts. For persistence, consider a database.
-conversations = {}
+# In-memory storage for chat sessions
+CHAT_SESSIONS = {}
+API_KEYS_STATUS = {}
 
-# --- API Key Management ---
-# Rotates through up to 10 API keys if they are set in the environment
-API_KEYS = [
-    os.getenv(f"GEMINI_API_KEY_{i}") for i in range(1, 11)
-]
-# Add the primary key if it exists
-if os.getenv("GEMINI_API_KEY"):
-    API_KEYS.append(os.getenv("GEMINI_API_KEY"))
-
-# Filter out None values in case not all keys are set
-API_KEYS = [key for key in API_KEYS if key]
-
-# --- Sanity Check for API Keys ---
-if not API_KEYS:
-    print("FATAL ERROR: No GEMINI_API_KEY environment variables found!")
-    print("Please set at least one GEMINI_API_KEY in your Render environment settings.")
-else:
-    print(f"Successfully loaded {len(API_KEYS)} API key(s).")
-
-# --- API Client Rotation ---
-current_api_key_index = 0
-
-def get_next_api_client(model_type="pro"):
-    """
-    Initializes and returns an OpenAI client configured for Gemini.
-    It rotates through the available API keys if multiple are provided.
-    
-    This function contains the fix for the original traceback.
-    """
-    global current_api_key_index
-    
-    if not API_KEYS:
-        raise Exception("No API keys configured. Cannot create an API client.")
-    
-    # Rotate to the next API key
-    api_key = API_KEYS[current_api_key_index % len(API_KEYS)]
-    current_api_key_index += 1
-    
-    # CORRECTED INITIALIZATION:
-    # The 'proxies' argument is removed to prevent the TypeError. The OpenAI client
-    # is initialized with only the necessary parameters for connecting to the Gemini API.
-    client = OpenAI(
-        api_key=api_key,
-        base_url="https://generativelanguage.googleapis.com/v1beta"
-    )
-    
-    return client
-
-# --- Helper Functions ---
-def encode_image_to_base64(file_content):
-    """Encodes image bytes into a base64 string for API transmission."""
-    return base64.b64encode(file_content).decode('utf-8')
-
-def estimate_tokens(text):
-    """Provides a rough estimation of token count (approx. 4 chars/token)."""
-    return len(text) // 4
-
-# --- HTML & CSS & JavaScript Template ---
-# This is the single-file template for the web interface.
+# HTML Template - Ultra Modern UI with direct access
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Jack's AI - Advanced AI Assistant</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <title>Jack's AI - Next Generation Assistant</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <style>
+        /* CSS Variables for theming */
         :root {
-            --primary-color: #2D3748; --secondary-color: #4A5568; --accent-color: #3182CE;
-            --background-color: #F7FAFC; --surface-color: #FFFFFF; --text-primary: #1A202C;
-            --text-secondary: #718096; --border-color: #E2E8F0; --success-color: #48BB78;
-            --warning-color: #ED8936; --error-color: #F56565; --user-bubble: #3182CE;
-            --ai-bubble: #F7FAFC;
+            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --secondary-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            --success-gradient: linear-gradient(135deg, #13B497 0%, #59D4A7 100%);
+            --warning-gradient: linear-gradient(135deg, #FA8231 0%, #FFD14C 100%);
+            --dark-gradient: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            --glass-bg: rgba(255, 255, 255, 0.95);
+            --glass-border: rgba(255, 255, 255, 0.18);
+            --shadow-color: rgba(0, 0, 0, 0.1);
+            --text-primary: #1a202c;
+            --text-secondary: #4a5568;
+            --border-radius: 20px;
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
+        
+        /* Dark theme variables */
+        [data-theme="dark"] {
+            --glass-bg: rgba(30, 30, 30, 0.95);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --shadow-color: rgba(0, 0, 0, 0.5);
+            --text-primary: #f7fafc;
+            --text-secondary: #a0aec0;
+            --bg-primary: #0f0f0f;
+            --bg-secondary: #1a1a1a;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
         body {
-            font-family: 'Inter', sans-serif; background-color: var(--background-color); color: var(--text-primary);
-            line-height: 1.6; height: 100vh; overflow: hidden; margin: 0; padding: 0; box-sizing: border-box;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0f0f0f;
+            min-height: 100vh;
+            overflow-x: hidden;
+            position: relative;
         }
-        .app-container { display: flex; flex-direction: column; height: 100vh; }
-        .header { background: var(--surface-color); border-bottom: 1px solid var(--border-color); padding: 1rem 1.5rem; display: flex; justify-content: space-between; align-items: center; }
-        .logo { display: flex; align-items: center; gap: 0.75rem; font-size: 1.25rem; font-weight: 600; }
-        .logo i { color: var(--accent-color); font-size: 1.5rem; }
-        .header-actions { display: flex; gap: 1rem; }
-        .btn { padding: 0.5rem 1rem; border-radius: 0.5rem; border: none; font-weight: 500; cursor: pointer; transition: all 0.2s; display: inline-flex; align-items: center; gap: 0.5rem; }
-        .btn-secondary { background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); }
-        .btn-secondary:hover { background: var(--background-color); color: var(--text-primary); }
-        .chat-container { flex: 1; overflow-y: auto; padding: 2rem 1rem; }
-        .chat-wrapper { max-width: 900px; width: 100%; margin: 0 auto; }
-        .message { display: flex; gap: 1rem; animation: fadeIn 0.3s ease; margin-bottom: 1.5rem; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .message.user { flex-direction: row-reverse; }
-        .message-avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-        .user .message-avatar { background: var(--user-bubble); color: white; }
-        .assistant .message-avatar { background: var(--border-color); color: var(--text-secondary); }
-        .message-content { flex: 1; max-width: 80%; }
-        .message-bubble { padding: 1rem 1.25rem; border-radius: 1rem; word-wrap: break-word; }
-        .user .message-bubble { background: var(--user-bubble); color: white; border-bottom-right-radius: 0.25rem; }
-        .assistant .message-bubble { background: var(--ai-bubble); color: var(--text-primary); border: 1px solid var(--border-color); border-bottom-left-radius: 0.25rem; }
-        .message-bubble pre { background: rgba(0,0,0,0.05); padding: 0.75rem; border-radius: 0.5rem; overflow-x: auto; margin: 1rem 0; }
-        .message-bubble code { font-family: 'Courier New', monospace; }
-        .input-container { background: var(--surface-color); border-top: 1px solid var(--border-color); padding: 1rem 1.5rem; }
-        .input-wrapper { max-width: 900px; margin: 0 auto; display: flex; gap: 1rem; align-items: flex-end; }
-        .input-group { flex: 1; position: relative; }
-        .input-textarea { width: 100%; min-height: 50px; max-height: 200px; padding: 0.75rem 3rem 0.75rem 1rem; border-radius: 0.75rem; border: 1px solid var(--border-color); resize: vertical; font-family: inherit; font-size: 1rem; line-height: 1.5; }
-        .input-textarea:focus { outline: none; border-color: var(--accent-color); }
-        .input-actions { position: absolute; right: 0.5rem; bottom: 0.5rem; display: flex; }
-        .icon-btn { width: 32px; height: 32px; border-radius: 0.5rem; border: none; background: transparent; color: var(--text-secondary); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
-        .icon-btn:hover { background: var(--background-color); color: var(--text-primary); }
-        .send-btn { background: var(--accent-color); color: white; }
-        .send-btn:hover { background: #2C5282; }
-        .send-btn:disabled { background: var(--border-color); cursor: not-allowed; }
-        #file-input { display: none; }
-        .typing-indicator { display: flex; gap: 4px; padding: 1rem; }
-        .typing-dot { width: 8px; height: 8px; background: var(--text-secondary); border-radius: 50%; animation: typing 1.4s infinite; }
-        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
-        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
-        @keyframes typing { 0%, 60%, 100% { transform: translateY(0); opacity: 0.5; } 30% { transform: translateY(-10px); opacity: 1; } }
-    </style>
-</head>
-<body>
-    <div class="app-container">
-        <div class="header">
-            <div class="logo"><i class="fas fa-robot"></i><span>Jack's AI</span></div>
-            <div class="header-actions">
-                <button class="btn btn-secondary" onclick="clearChat()"><i class="fas fa-broom"></i> New Chat</button>
-            </div>
-        </div>
-        <div class="chat-container" id="chat-container">
-            <div class="chat-wrapper" id="chat-wrapper">
-                <div class="message assistant">
-                    <div class="message-avatar"><i class="fas fa-robot"></i></div>
-                    <div class="message-content">
-                        <div class="message-bubble">
-                            <p>Welcome to Jack's AI! How can I assist you today?</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="input-container">
-            <div class="input-wrapper">
-                <div class="input-group">
-                    <textarea class="input-textarea" id="user-input" placeholder="Type your message..." rows="1"></textarea>
-                    <div class="input-actions">
-                        <button class="icon-btn send-btn" id="send-btn" onclick="sendMessage()" title="Send message"><i class="fas fa-paper-plane"></i></button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <script>
-        const userInput = document.getElementById('user-input');
-        const sendBtn = document.getElementById('send-btn');
-        const chatWrapper = document.getElementById('chat-wrapper');
-        const chatContainer = document.getElementById('chat-container');
-
-        userInput.addEventListener('input', () => {
-            userInput.style.height = 'auto';
-            userInput.style.height = (userInput.scrollHeight) + 'px';
-        });
-
-        userInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
+        
+        /* Animated gradient background */
+        .animated-bg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(270deg, #667eea, #764ba2, #f093fb, #f5576c);
+            background-size: 800% 800%;
+            animation: gradientShift 20s ease infinite;
+            z-index: -2;
+        }
+        
+        @keyframes gradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        
+        /* Floating particles effect */
+        .particles {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: -1;
+        }
+        
+        .particle {
+            position: absolute;
+            width: 4px;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.5);
+            border-radius: 50%;
+            animation: float 15s infinite;
+        }
+        
+        @keyframes float {
+            0%, 100% {
+                transform: translateY(0) translateX(0);
+                opacity: 0;
             }
-        });
-
-        async function sendMessage() {
-            const message = userInput.value.trim();
-            if (!message) return;
-
-            addMessageToUI('user', message);
-            userInput.value = '';
-            userInput.style.height = 'auto';
-            sendBtn.disabled = true;
-            showTypingIndicator();
-
-            try {
-                const response = await fetch('/chat', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ message: message })
-                });
-
-                const data = await response.json();
-                hideTypingIndicator();
-
-                if (response.ok && data.reply) {
-                    addMessageToUI('assistant', data.reply);
-                } else {
-                    addMessageToUI('assistant', data.error || 'Sorry, something went wrong.');
-                }
-            } catch (error) {
-                hideTypingIndicator();
-                addMessageToUI('assistant', 'Error connecting to the server. Please try again.');
-                console.error('Fetch error:', error);
-            } finally {
-                sendBtn.disabled = false;
+            10% {
+                opacity: 1;
             }
-        }
-
-        function addMessageToUI(role, content) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${role}`;
-            
-            const avatarIcon = role === 'user' ? 'fa-user' : 'fa-robot';
-            const formattedContent = content.replace(/\\n/g, '<br>').replace(/```([\\s\\S]*?)```/g, '<pre><code>$1</code></pre>');
-
-            messageDiv.innerHTML = `
-                <div class="message-avatar"><i class="fas ${avatarIcon}"></i></div>
-                <div class="message-content">
-                    <div class="message-bubble">${formattedContent}</div>
-                </div>
-            `;
-            chatWrapper.appendChild(messageDiv);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-        }
-
-        function showTypingIndicator() {
-            const indicator = document.createElement('div');
-            indicator.id = 'typing-indicator';
-            indicator.className = 'message assistant';
-            indicator.innerHTML = `
-                <div class="message-avatar"><i class="fas fa-robot"></i></div>
-                <div class="message-content">
-                    <div class="typing-indicator">
-                        <div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>
-                    </div>
-                </div>
-            `;
-            chatWrapper.appendChild(indicator);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-        }
-
-        function hideTypingIndicator() {
-            const indicator = document.getElementById('typing-indicator');
-            if (indicator) indicator.remove();
-        }
-
-        async function clearChat() {
-            if (confirm('Are you sure you want to start a new chat?')) {
-                await fetch('/clear_chat', { method: 'POST' });
-                chatWrapper.innerHTML = '';
-                addMessageToUI('assistant', 'Welcome back! How can I help you?');
+            90% {
+                opacity: 1;
+            }
+            100% {
+                transform: translateY(-100vh) translateX(100px);
+                opacity: 0;
             }
         }
         
-        // Load conversation on page load
-        async function loadConversation() {
-             try {
-                const response = await fetch('/load_conversation');
-                const data = await response.json();
-                if (data.messages && data.messages.length > 0) {
-                    chatWrapper.innerHTML = ''; // Clear welcome message
-                    data.messages.forEach(msg => addMessageToUI(msg.role, msg.content));
-                }
-            } catch (error) {
-                console.error('Error loading conversation:', error);
+        /* Main container with glass morphism */
+        .main-container {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+        }
+        
+        /* Chat container */
+        .chat-container {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 30px;
+            box-shadow: 
+                0 20px 40px var(--shadow-color),
+                0 0 80px rgba(102, 126, 234, 0.1),
+                inset 0 0 20px rgba(255, 255, 255, 0.05);
+            width: 100%;
+            max-width: 1400px;
+            height: 90vh;
+            display: flex;
+            overflow: hidden;
+            animation: slideUp 0.5s ease-out;
+        }
+        
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
             }
         }
-
-        window.onload = loadConversation;
-
+        
+        /* Sidebar */
+        .sidebar {
+            width: 280px;
+            background: rgba(255, 255, 255, 0.05);
+            border-right: 1px solid var(--glass-border);
+            display: flex;
+            flex-direction: column;
+            transition: var(--transition);
+        }
+        
+        .sidebar-header {
+            padding: 30px 20px;
+            background: var(--primary-gradient);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .sidebar-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+            animation: pulse 3s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 0.5; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            color: white;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .logo-icon {
+            width: 50px;
+            height: 50px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+        
+        .logo-text {
+            flex: 1;
+        }
+        
+        .logo-text h1 {
+            font-size: 20px;
+            font-weight: 800;
+            margin-bottom: 4px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        .logo-text p {
+            font-size: 12px;
+            opacity: 0.9;
+            font-weight: 500;
+        }
+        
+        /* Chat history */
+        .chat-history {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        
+        .chat-history::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        .chat-history::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+        }
+        
+        .chat-history::-webkit-scrollbar-thumb {
+            background: var(--primary-gradient);
+            border-radius: 10px;
+        }
+        
+        .welcome-message {
+            padding: 20px;
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        
+        .welcome-message h3 {
+            color: var(--text-primary);
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+        
+        /* Sidebar actions */
+        .sidebar-actions {
+            padding: 20px;
+            border-top: 1px solid var(--glass-border);
+        }
+        
+        .new-chat-btn {
+            width: 100%;
+            padding: 15px;
+            background: var(--primary-gradient);
+            color: white;
+            border: none;
+            border-radius: 15px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+        
+        .new-chat-btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.4s, height 0.4s;
+        }
+        
+        .new-chat-btn:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+        
+        .new-chat-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 30px rgba(102, 126, 234, 0.4);
+        }
+        
+        /* Main chat area */
+        .chat-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+        
+        /* Chat header */
+        .chat-header {
+            padding: 25px 30px;
+            background: rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid var(--glass-border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            backdrop-filter: blur(10px);
+        }
+        
+        .chat-header-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .model-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: var(--primary-gradient);
+            color: white;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+        
+        .model-badge i {
+            font-size: 14px;
+        }
+        
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: var(--success-gradient);
+            color: white;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: white;
+            border-radius: 50%;
+            animation: blink 1s infinite;
+        }
+        
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+        
+        /* Chat header actions */
+        .chat-header-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .header-btn {
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            border: 1px solid var(--glass-border);
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: var(--transition);
+            position: relative;
+        }
+        
+        .header-btn:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: scale(1.1);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+        
+        .tooltip {
+            position: absolute;
+            bottom: -35px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 8px;
+            font-size: 12px;
+            white-space: nowrap;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+        }
+        
+        .header-btn:hover .tooltip {
+            opacity: 1;
+        }
+        
+        /* Messages area */
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 30px;
+            scroll-behavior: smooth;
+            position: relative;
+        }
+        
+        .messages-container::-webkit-scrollbar {
+            width: 10px;
+        }
+        
+        .messages-container::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+        }
+        
+        .messages-container::-webkit-scrollbar-thumb {
+            background: var(--primary-gradient);
+            border-radius: 10px;
+        }
+        
+        /* Date divider */
+        .date-divider {
+            text-align: center;
+            margin: 30px 0;
+            position: relative;
+        }
+        
+        .date-divider::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: var(--glass-border);
+        }
+        
+        .date-divider span {
+            background: var(--glass-bg);
+            padding: 0 20px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 600;
+            position: relative;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        /* Message bubbles */
+        .message {
+            margin-bottom: 20px;
+            animation: messageSlide 0.3s ease-out;
+            display: flex;
+            align-items: flex-start;
+            gap: 15px;
+        }
+        
+        @keyframes messageSlide {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .message.user {
+            flex-direction: row-reverse;
+        }
+        
+        .message-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+        
+        .message.user .message-avatar {
+            background: var(--primary-gradient);
+            color: white;
+        }
+        
+        .message.assistant .message-avatar {
+            background: var(--secondary-gradient);
+            color: white;
+        }
+        
+        .message-content-wrapper {
+            max-width: 70%;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .message-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 0 10px;
+        }
+        
+        .message-author {
+            font-weight: 600;
+            font-size: 13px;
+            color: var(--text-primary);
+        }
+        
+        .message-time {
+            font-size: 11px;
+            color: var(--text-secondary);
+            opacity: 0.6;
+        }
+        
+        .message-bubble {
+            padding: 16px 20px;
+            border-radius: 20px;
+            position: relative;
+            word-wrap: break-word;
+            line-height: 1.6;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
+        }
+        
+        .message.user .message-bubble {
+            background: var(--primary-gradient);
+            color: white;
+            border-bottom-right-radius: 5px;
+        }
+        
+        .message.assistant .message-bubble {
+            background: rgba(255, 255, 255, 0.9);
+            color: var(--text-primary);
+            border: 1px solid var(--glass-border);
+            border-bottom-left-radius: 5px;
+        }
+        
+        [data-theme="dark"] .message.assistant .message-bubble {
+            background: rgba(40, 40, 40, 0.9);
+        }
+        
+        /* Message actions */
+        .message-actions {
+            display: flex;
+            gap: 8px;
+            padding: 0 10px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .message:hover .message-actions {
+            opacity: 1;
+        }
+        
+        .message-action {
+            padding: 6px 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid var(--glass-border);
+            border-radius: 8px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: var(--transition);
+            color: var(--text-secondary);
+        }
+        
+        .message-action:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: scale(1.05);
+        }
+        
+        /* Typing indicator */
+        .typing-indicator {
+            display: none;
+            align-items: center;
+            gap: 15px;
+            padding: 20px 30px;
+        }
+        
+        .typing-indicator.active {
+            display: flex;
+            animation: fadeIn 0.3s;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        .typing-dots {
+            display: flex;
+            gap: 4px;
+        }
+        
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--primary-gradient);
+            border-radius: 50%;
+            animation: typingAnimation 1.4s infinite;
+        }
+        
+        .typing-dot:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+        
+        .typing-dot:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+        
+        @keyframes typingAnimation {
+            0%, 60%, 100% {
+                transform: translateY(0);
+                opacity: 0.7;
+            }
+            30% {
+                transform: translateY(-10px);
+                opacity: 1;
+            }
+        }
+        
+        /* Input area */
+        .input-section {
+            padding: 20px 30px 30px;
+            background: rgba(255, 255, 255, 0.05);
+            border-top: 1px solid var(--glass-border);
+            backdrop-filter: blur(10px);
+        }
+        
+        /* Token usage bar */
+        .token-usage-bar {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            border: 1px solid var(--glass-border);
+        }
+        
+        .token-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .token-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+        
+        .token-count {
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .token-progress {
+            height: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .token-fill {
+            height: 100%;
+            background: var(--primary-gradient);
+            border-radius: 10px;
+            transition: width 0.5s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .token-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            right: 0;
+            background: linear-gradient(
+                90deg,
+                transparent,
+                rgba(255, 255, 255, 0.3),
+                transparent
+            );
+            animation: shimmer 2s infinite;
+        }
+        
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        /* Input container */
+        .input-container {
+            display: flex;
+            gap: 15px;
+            align-items: flex-end;
+        }
+        
+        .input-wrapper {
+            flex: 1;
+            position: relative;
+        }
+        
+        .input-box {
+            width: 100%;
+            min-height: 50px;
+            max-height: 150px;
+            padding: 15px 50px 15px 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid var(--glass-border);
+            border-radius: 20px;
+            color: var(--text-primary);
+            font-size: 15px;
+            resize: none;
+            transition: var(--transition);
+            font-family: 'Inter', sans-serif;
+            line-height: 1.5;
+        }
+        
+        .input-box:focus {
+            outline: none;
+            border-color: #667eea;
+            background: rgba(255, 255, 255, 0.15);
+            box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+        }
+        
+        .input-box::placeholder {
+            color: var(--text-secondary);
+            opacity: 0.6;
+        }
+        
+        /* Input actions */
+        .input-actions {
+            position: absolute;
+            right: 10px;
+            bottom: 10px;
+            display: flex;
+            gap: 5px;
+        }
+        
+        .input-action-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid var(--glass-border);
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        
+        .input-action-btn:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: scale(1.1);
+        }
+        
+        /* File upload area */
+        .file-upload-section {
+            margin-bottom: 15px;
+            display: none;
+        }
+        
+        .file-upload-section.active {
+            display: block;
+            animation: slideDown 0.3s ease;
+        }
+        
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                max-height: 0;
+            }
+            to {
+                opacity: 1;
+                max-height: 200px;
+            }
+        }
+        
+        .files-preview {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            border: 2px dashed var(--glass-border);
+            min-height: 80px;
+            position: relative;
+        }
+        
+        .file-preview-item {
+            padding: 10px 15px;
+            background: var(--primary-gradient);
+            color: white;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            animation: fadeIn 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .file-preview-item::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateX(-100%);
+            transition: transform 0.3s;
+        }
+        
+        .file-preview-item:hover::before {
+            transform: translateX(0);
+        }
+        
+        .file-remove {
+            cursor: pointer;
+            opacity: 0.8;
+            transition: opacity 0.3s;
+        }
+        
+        .file-remove:hover {
+            opacity: 1;
+            transform: scale(1.2);
+        }
+        
+        .drop-zone-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: var(--text-secondary);
+            font-size: 14px;
+            pointer-events: none;
+            opacity: 0.6;
+        }
+        
+        /* Send button */
+        .send-button {
+            padding: 15px 30px;
+            background: var(--primary-gradient);
+            color: white;
+            border: none;
+            border-radius: 20px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3);
+        }
+        
+        .send-button::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.4s, height 0.4s;
+        }
+        
+        .send-button:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+        
+        .send-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 35px rgba(102, 126, 234, 0.4);
+        }
+        
+        .send-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        /* Quick actions bar */
+        .quick-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+            flex-wrap: wrap;
+        }
+        
+        .quick-action {
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            color: var(--text-secondary);
+            font-size: 13px;
+            cursor: pointer;
+            transition: var(--transition);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .quick-action:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: scale(1.05);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+        
+        /* Notifications */
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 20px 25px;
+            border-radius: 15px;
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            z-index: 10000;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            animation: slideInRight 0.3s ease-out;
+            backdrop-filter: blur(10px);
+        }
+        
+        @keyframes slideInRight {
+            from {
+                opacity: 0;
+                transform: translateX(100%);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+        
+        .notification.success {
+            background: var(--success-gradient);
+        }
+        
+        .notification.error {
+            background: linear-gradient(135deg, #f5576c 0%, #f093fb 100%);
+        }
+        
+        .notification.warning {
+            background: var(--warning-gradient);
+        }
+        
+        .notification-icon {
+            font-size: 20px;
+        }
+        
+        .notification-close {
+            margin-left: auto;
+            cursor: pointer;
+            opacity: 0.8;
+            transition: opacity 0.3s;
+        }
+        
+        .notification-close:hover {
+            opacity: 1;
+        }
+        
+        /* Loading overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(5px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+        
+        .loading-overlay.active {
+            display: flex;
+        }
+        
+        .loading-spinner {
+            width: 60px;
+            height: 60px;
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Responsive design */
+        @media (max-width: 768px) {
+            .sidebar {
+                display: none;
+            }
+            
+            .chat-container {
+                height: 100vh;
+                border-radius: 0;
+            }
+            
+            .message-content-wrapper {
+                max-width: 85%;
+            }
+        }
+        
+        /* Prompt enhancement modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(10px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 9998;
+            padding: 20px;
+        }
+        
+        .modal-overlay.active {
+            display: flex;
+            animation: fadeIn 0.3s;
+        }
+        
+        .modal-content {
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 25px;
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            animation: slideUp 0.3s ease-out;
+        }
+        
+        .modal-header {
+            margin-bottom: 30px;
+        }
+        
+        .modal-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 10px;
+        }
+        
+        .modal-subtitle {
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+        
+        .prompt-option {
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid var(--glass-border);
+            border-radius: 15px;
+            margin-bottom: 20px;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        
+        .prompt-option:hover {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.1);
+        }
+        
+        .prompt-option.selected {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.2);
+        }
+        
+        .prompt-option-title {
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 10px;
+        }
+        
+        .prompt-option-text {
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        
+        .modal-actions {
+            display: flex;
+            gap: 15px;
+            margin-top: 30px;
+        }
+        
+        .modal-btn {
+            flex: 1;
+            padding: 15px;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            text-align: center;
+        }
+        
+        .modal-btn-primary {
+            background: var(--primary-gradient);
+            color: white;
+            border: none;
+        }
+        
+        .modal-btn-secondary {
+            background: transparent;
+            color: var(--text-primary);
+            border: 2px solid var(--glass-border);
+        }
+        
+        .modal-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <!-- Animated background -->
+    <div class="animated-bg"></div>
+    
+    <!-- Floating particles -->
+    <div class="particles" id="particles"></div>
+    
+    <!-- Loading overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+    </div>
+    
+    <!-- Main container -->
+    <div class="main-container">
+        <!-- Chat Interface (No login required) -->
+        <div class="chat-container" id="chatContainer">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <div class="logo">
+                        <div class="logo-icon">
+                            <i class="fas fa-robot"></i>
+                        </div>
+                        <div class="logo-text">
+                            <h1>Jack's AI</h1>
+                            <p>Next Generation Assistant</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="chat-history" id="chatHistory">
+                    <div class="welcome-message">
+                        <h3>🚀 Welcome!</h3>
+                        <p>Start chatting with the most advanced AI assistant. No signup required!</p>
+                    </div>
+                </div>
+                
+                <div class="sidebar-actions">
+                    <button class="new-chat-btn" onclick="newChat()">
+                        <i class="fas fa-plus"></i> New Chat
+                    </button>
+                </div>
+            </aside>
+            
+            <!-- Main chat area -->
+            <main class="chat-main">
+                <!-- Chat header -->
+                <header class="chat-header">
+                    <div class="chat-header-info">
+                        <div class="model-badge">
+                            <i class="fas fa-microchip"></i>
+                            <span>Gemini 2.5 Pro</span>
+                        </div>
+                        <div class="status-indicator">
+                            <span class="status-dot"></span>
+                            <span>Online</span>
+                        </div>
+                    </div>
+                    
+                    <div class="chat-header-actions">
+                        <button class="header-btn" onclick="toggleTheme()">
+                            <i class="fas fa-moon" id="themeIcon"></i>
+                            <span class="tooltip">Toggle Theme</span>
+                        </button>
+                        <button class="header-btn" onclick="compactChat()">
+                            <i class="fas fa-compress"></i>
+                            <span class="tooltip">Compact Chat</span>
+                        </button>
+                        <button class="header-btn" onclick="exportChat()">
+                            <i class="fas fa-download"></i>
+                            <span class="tooltip">Export Chat</span>
+                        </button>
+                        <button class="header-btn" onclick="clearChat()">
+                            <i class="fas fa-trash"></i>
+                            <span class="tooltip">Clear Chat</span>
+                        </button>
+                    </div>
+                </header>
+                
+                <!-- Messages container -->
+                <div class="messages-container" id="messagesContainer">
+                    <div class="date-divider">
+                        <span>Today</span>
+                    </div>
+                    
+                    <!-- Welcome message -->
+                    <div class="message assistant">
+                        <div class="message-avatar">
+                            <i class="fas fa-robot"></i>
+                        </div>
+                        <div class="message-content-wrapper">
+                            <div class="message-header">
+                                <span class="message-author">Jack's AI</span>
+                                <span class="message-time">Now</span>
+                            </div>
+                            <div class="message-bubble">
+                                👋 Welcome! I'm your advanced AI assistant powered by Gemini 2.5 Pro. I can help you with complex tasks, analyze documents, generate code, and much more. How can I assist you today?
+                            </div>
+                            <div class="message-actions">
+                                <button class="message-action" onclick="copyMessage(this)">
+                                    <i class="fas fa-copy"></i> Copy
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Typing indicator -->
+                <div class="typing-indicator" id="typingIndicator">
+                    <div class="message-avatar">
+                        <i class="fas fa-robot"></i>
+                    </div>
+                    <div class="typing-dots">
+                        <span class="typing-dot"></span>
+                        <span class="typing-dot"></span>
+                        <span class="typing-dot"></span>
+                    </div>
+                </div>
+                
+                <!-- Input section -->
+                <div class="input-section">
+                    <!-- Token usage bar -->
+                    <div class="token-usage-bar">
+                        <div class="token-header">
+                            <div class="token-label">
+                                <i class="fas fa-chart-line"></i>
+                                <span>Context Window</span>
+                            </div>
+                            <div class="token-count">
+                                <span id="tokenCount">0</span> / 125,000 tokens
+                            </div>
+                        </div>
+                        <div class="token-progress">
+                            <div class="token-fill" id="tokenFill" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- File upload section -->
+                    <div class="file-upload-section" id="fileUploadSection">
+                        <div class="files-preview" id="filesPreview">
+                            <span class="drop-zone-text">Drop files here or click to browse</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Input container -->
+                    <div class="input-container">
+                        <div class="input-wrapper">
+                            <textarea 
+                                class="input-box" 
+                                id="messageInput" 
+                                placeholder="Type your message here... (Shift+Enter for new line)"
+                                rows="1"
+                            ></textarea>
+                            <div class="input-actions">
+                                <button class="input-action-btn" onclick="toggleFileUpload()">
+                                    <i class="fas fa-paperclip"></i>
+                                </button>
+                                <button class="input-action-btn" onclick="toggleVoiceInput()">
+                                    <i class="fas fa-microphone"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <button class="send-button" id="sendButton" onclick="sendMessage()">
+                            <i class="fas fa-paper-plane"></i>
+                            <span>Send</span>
+                        </button>
+                    </div>
+                    
+                    <!-- Quick actions -->
+                    <div class="quick-actions">
+                        <button class="quick-action" onclick="insertPrompt('Explain in detail')">
+                            <i class="fas fa-info-circle"></i> Explain
+                        </button>
+                        <button class="quick-action" onclick="insertPrompt('Analyze and provide insights')">
+                            <i class="fas fa-chart-bar"></i> Analyze
+                        </button>
+                        <button class="quick-action" onclick="insertPrompt('Generate code for')">
+                            <i class="fas fa-code"></i> Code
+                        </button>
+                        <button class="quick-action" onclick="insertPrompt('Create a comprehensive')">
+                            <i class="fas fa-file-alt"></i> Create
+                        </button>
+                        <button class="quick-action" onclick="insertPrompt('Solve step by step')">
+                            <i class="fas fa-calculator"></i> Solve
+                        </button>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+    
+    <!-- Prompt Enhancement Modal -->
+    <div class="modal-overlay" id="promptModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">✨ Enhance Your Prompt</h2>
+                <p class="modal-subtitle">Choose how you'd like to ask your question</p>
+            </div>
+            
+            <div class="prompt-option" id="originalOption" onclick="selectPromptOption('original')">
+                <div class="prompt-option-title">Original Prompt</div>
+                <div class="prompt-option-text" id="originalPromptText"></div>
+            </div>
+            
+            <div class="prompt-option selected" id="enhancedOption" onclick="selectPromptOption('enhanced')">
+                <div class="prompt-option-title">Enhanced Prompt (Recommended)</div>
+                <div class="prompt-option-text" id="enhancedPromptText"></div>
+            </div>
+            
+            <div class="modal-actions">
+                <button class="modal-btn modal-btn-secondary" onclick="closePromptModal()">
+                    Cancel
+                </button>
+                <button class="modal-btn modal-btn-primary" onclick="confirmPromptSelection()">
+                    Use Selected Prompt
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- File input (hidden) -->
+    <input type="file" id="fileInput" multiple style="display: none;">
+    
+    <script>
+        // Application state
+        let chatHistory = [];
+        let tokenUsage = 0;
+        let selectedPromptType = 'enhanced';
+        let currentPrompt = '';
+        let enhancedPrompt = '';
+        let attachedFiles = [];
+        let isDarkTheme = true;
+        let sessionId = null;
+        
+        // Generate session ID
+        function generateSessionId() {
+            return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        }
+        
+        // Initialize session
+        function initializeSession() {
+            sessionId = localStorage.getItem('sessionId');
+            if (!sessionId) {
+                sessionId = generateSessionId();
+                localStorage.setItem('sessionId', sessionId);
+            }
+            
+            // Load saved chat history
+            const savedHistory = localStorage.getItem('chatHistory');
+            if (savedHistory) {
+                try {
+                    chatHistory = JSON.parse(savedHistory);
+                    displayChatHistory();
+                } catch (e) {
+                    console.error('Error loading chat history:', e);
+                }
+            }
+            
+            // Load token usage
+            const savedTokens = localStorage.getItem('tokenUsage');
+            if (savedTokens) {
+                tokenUsage = parseInt(savedTokens) || 0;
+                updateTokenBar();
+            }
+        }
+        
+        // Display chat history
+        function displayChatHistory() {
+            const container = document.getElementById('messagesContainer');
+            container.innerHTML = `
+                <div class="date-divider">
+                    <span>Today</span>
+                </div>
+            `;
+            
+            chatHistory.forEach(msg => {
+                addMessageToUI(msg.role, msg.content, false);
+            });
+        }
+        
+        // Initialize particles
+        function createParticles() {
+            const particlesContainer = document.getElementById('particles');
+            for (let i = 0; i < 50; i++) {
+                const particle = document.createElement('div');
+                particle.className = 'particle';
+                particle.style.left = Math.random() * 100 + '%';
+                particle.style.animationDelay = Math.random() * 15 + 's';
+                particle.style.animationDuration = (15 + Math.random() * 10) + 's';
+                particlesContainer.appendChild(particle);
+            }
+        }
+        
+        // Theme toggle
+        function toggleTheme() {
+            isDarkTheme = !isDarkTheme;
+            document.documentElement.setAttribute('data-theme', isDarkTheme ? 'dark' : 'light');
+            const icon = document.getElementById('themeIcon');
+            icon.className = isDarkTheme ? 'fas fa-moon' : 'fas fa-sun';
+            
+            // Save preference
+            localStorage.setItem('theme', isDarkTheme ? 'dark' : 'light');
+        }
+        
+        // Load theme preference
+        function loadThemePreference() {
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme) {
+                isDarkTheme = savedTheme === 'dark';
+                document.documentElement.setAttribute('data-theme', savedTheme);
+                const icon = document.getElementById('themeIcon');
+                if (icon) {
+                    icon.className = isDarkTheme ? 'fas fa-moon' : 'fas fa-sun';
+                }
+            }
+        }
+        
+        // Show notification
+        function showNotification(message, type = 'success') {
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.innerHTML = `
+                <i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'} notification-icon"></i>
+                <span>${message}</span>
+                <i class="fas fa-times notification-close" onclick="this.parentElement.remove()"></i>
+            `;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                notification.remove();
+            }, 5000);
+        }
+        
+        // Auto-resize textarea
+        function autoResizeTextarea() {
+            const textarea = document.getElementById('messageInput');
+            textarea.style.height = 'auto';
+            textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px';
+        }
+        
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Initializing Jack\'s AI...');
+            
+            const messageInput = document.getElementById('messageInput');
+            if (messageInput) {
+                messageInput.addEventListener('input', autoResizeTextarea);
+                messageInput.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        sendMessage();
+                    }
+                });
+            }
+            
+            // File input handler
+            const fileInput = document.getElementById('fileInput');
+            if (fileInput) {
+                fileInput.addEventListener('change', handleFileSelect);
+            }
+            
+            // Initialize
+            createParticles();
+            loadThemePreference();
+            initializeSession();
+            
+            console.log('Jack\'s AI ready!');
+        });
+        
+        // Send message
+        async function sendMessage() {
+            const messageInput = document.getElementById('messageInput');
+            const message = messageInput.value.trim();
+            
+            if (!message && attachedFiles.length === 0) {
+                return;
+            }
+            
+            currentPrompt = message;
+            messageInput.value = '';
+            autoResizeTextarea();
+            document.getElementById('sendButton').disabled = true;
+            
+            // Add user message to UI
+            if (message) {
+                addMessageToUI('user', message, true);
+            }
+            
+            // Show typing indicator
+            document.getElementById('typingIndicator').classList.add('active');
+            
+            // Get enhanced prompt
+            try {
+                const enhanceResponse = await fetch('/enhance_prompt', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        prompt: message,
+                        session_id: sessionId
+                    })
+                });
+                
+                const enhanceData = await enhanceResponse.json();
+                
+                if (enhanceData.success) {
+                    enhancedPrompt = enhanceData.enhanced_prompt;
+                    showPromptModal(message, enhancedPrompt);
+                } else {
+                    await processMessage(message);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                await processMessage(message);
+            }
+        }
+        
+        // Show prompt modal
+        function showPromptModal(original, enhanced) {
+            document.getElementById('originalPromptText').textContent = original;
+            document.getElementById('enhancedPromptText').textContent = enhanced;
+            document.getElementById('promptModal').classList.add('active');
+            document.getElementById('typingIndicator').classList.remove('active');
+            document.getElementById('sendButton').disabled = false;
+        }
+        
+        // Select prompt option
+        function selectPromptOption(type) {
+            selectedPromptType = type;
+            document.getElementById('originalOption').classList.toggle('selected', type === 'original');
+            document.getElementById('enhancedOption').classList.toggle('selected', type === 'enhanced');
+        }
+        
+        // Close prompt modal
+        function closePromptModal() {
+            document.getElementById('promptModal').classList.remove('active');
+            document.getElementById('sendButton').disabled = false;
+        }
+        
+        // Confirm prompt selection
+        async function confirmPromptSelection() {
+            closePromptModal();
+            const promptToUse = selectedPromptType === 'original' ? currentPrompt : enhancedPrompt;
+            await processMessage(promptToUse);
+        }
+        
+        // Process message
+        async function processMessage(prompt) {
+            document.getElementById('typingIndicator').classList.add('active');
+            
+            const formData = new FormData();
+            formData.append('message', prompt);
+            formData.append('session_id', sessionId);
+            
+            // Add files
+            for (let file of attachedFiles) {
+                formData.append('files', file);
+            }
+            
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addMessageToUI('assistant', data.response, true);
+                    tokenUsage = data.token_usage || tokenUsage;
+                    updateTokenBar();
+                    
+                    // Save to localStorage
+                    localStorage.setItem('tokenUsage', tokenUsage);
+                    
+                    if (tokenUsage > 100000) {
+                        showNotification('Approaching context limit. Consider starting a new chat.', 'warning');
+                    }
+                } else {
+                    showNotification(data.error || 'Failed to get response', 'error');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showNotification('Network error. Please try again.', 'error');
+            } finally {
+                document.getElementById('typingIndicator').classList.remove('active');
+                document.getElementById('sendButton').disabled = false;
+                clearFiles();
+            }
+        }
+        
+        // Add message to UI
+        function addMessageToUI(role, content, save = false) {
+            const container = document.getElementById('messagesContainer');
+            const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}`;
+            messageDiv.innerHTML = `
+                <div class="message-avatar">
+                    <i class="fas fa-${role === 'user' ? 'user' : 'robot'}"></i>
+                </div>
+                <div class="message-content-wrapper">
+                    <div class="message-header">
+                        <span class="message-author">${role === 'user' ? 'You' : "Jack's AI"}</span>
+                        <span class="message-time">${time}</span>
+                    </div>
+                    <div class="message-bubble">${content.replace(/\n/g, '<br>')}</div>
+                    <div class="message-actions">
+                        <button class="message-action" onclick="copyMessage(this)">
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            container.appendChild(messageDiv);
+            container.scrollTop = container.scrollHeight;
+            
+            // Save to history
+            if (save) {
+                chatHistory.push({ role, content });
+                localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
+            }
+        }
+        
+        // Copy message
+        function copyMessage(button) {
+            const content = button.closest('.message-content-wrapper').querySelector('.message-bubble').textContent;
+            navigator.clipboard.writeText(content);
+            showNotification('Message copied to clipboard', 'success');
+        }
+        
+        // Update token bar
+        function updateTokenBar() {
+            const percentage = Math.min((tokenUsage / 125000) * 100, 100);
+            document.getElementById('tokenFill').style.width = percentage + '%';
+            document.getElementById('tokenCount').textContent = tokenUsage.toLocaleString();
+            
+            // Change color based on usage
+            const fill = document.getElementById('tokenFill');
+            if (percentage > 80) {
+                fill.style.background = 'linear-gradient(135deg, #f5576c 0%, #f093fb 100%)';
+            } else if (percentage > 60) {
+                fill.style.background = 'linear-gradient(135deg, #FA8231 0%, #FFD14C 100%)';
+            }
+        }
+        
+        // Toggle file upload
+        function toggleFileUpload() {
+            const fileSection = document.getElementById('fileUploadSection');
+            if (fileSection.classList.contains('active')) {
+                fileSection.classList.remove('active');
+            } else {
+                fileSection.classList.add('active');
+                document.getElementById('fileInput').click();
+            }
+        }
+        
+        // Handle file select
+        function handleFileSelect(event) {
+            const files = event.target.files;
+            const preview = document.getElementById('filesPreview');
+            
+            for (let file of files) {
+                if (file.size > 100 * 1024 * 1024) {
+                    showNotification(`File ${file.name} is too large. Max size is 100MB.`, 'error');
+                    continue;
+                }
+                
+                attachedFiles.push(file);
+                
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-preview-item';
+                fileItem.innerHTML = `
+                    <i class="fas fa-file"></i>
+                    <span>${file.name}</span>
+                    <i class="fas fa-times file-remove" onclick="removeFile('${file.name}')"></i>
+                `;
+                
+                preview.appendChild(fileItem);
+            }
+            
+            // Remove placeholder text
+            const placeholder = preview.querySelector('.drop-zone-text');
+            if (placeholder && attachedFiles.length > 0) {
+                placeholder.style.display = 'none';
+            }
+        }
+        
+        // Remove file
+        function removeFile(fileName) {
+            attachedFiles = attachedFiles.filter(f => f.name !== fileName);
+            
+            const preview = document.getElementById('filesPreview');
+            const items = preview.querySelectorAll('.file-preview-item');
+            items.forEach(item => {
+                if (item.textContent.includes(fileName)) {
+                    item.remove();
+                }
+            });
+            
+            // Show placeholder if no files
+            if (attachedFiles.length === 0) {
+                const placeholder = preview.querySelector('.drop-zone-text');
+                if (placeholder) {
+                    placeholder.style.display = 'block';
+                }
+            }
+        }
+        
+        // Clear files
+        function clearFiles() {
+            attachedFiles = [];
+            const preview = document.getElementById('filesPreview');
+            preview.innerHTML = '<span class="drop-zone-text">Drop files here or click to browse</span>';
+            document.getElementById('fileUploadSection').classList.remove('active');
+        }
+        
+        // New chat
+        function newChat() {
+            if (confirm('Start a new chat? Current conversation will be saved.')) {
+                chatHistory = [];
+                tokenUsage = 0;
+                updateTokenBar();
+                
+                localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
+                localStorage.setItem('tokenUsage', '0');
+                
+                const container = document.getElementById('messagesContainer');
+                container.innerHTML = `
+                    <div class="date-divider">
+                        <span>Today</span>
+                    </div>
+                `;
+                
+                addMessageToUI('assistant', 'New chat started! How can I help you today?', true);
+                showNotification('New chat created', 'success');
+            }
+        }
+        
+        // Clear chat
+        function clearChat() {
+            if (confirm('Clear all messages? This cannot be undone.')) {
+                chatHistory = [];
+                tokenUsage = 0;
+                updateTokenBar();
+                
+                localStorage.removeItem('chatHistory');
+                localStorage.removeItem('tokenUsage');
+                
+                const container = document.getElementById('messagesContainer');
+                container.innerHTML = `
+                    <div class="date-divider">
+                        <span>Today</span>
+                    </div>
+                `;
+                
+                addMessageToUI('assistant', 'Chat cleared! How can I help you today?', false);
+                showNotification('Chat cleared', 'success');
+            }
+        }
+        
+        // Compact chat
+        async function compactChat() {
+            if (chatHistory.length < 10) {
+                showNotification('Chat is too short to compact', 'warning');
+                return;
+            }
+            
+            if (confirm('Compact this conversation to reduce token usage?')) {
+                showLoading();
+                
+                try {
+                    const response = await fetch('/compact_chat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            session_id: sessionId
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        const container = document.getElementById('messagesContainer');
+                        container.innerHTML = `
+                            <div class="date-divider">
+                                <span>Compacted</span>
+                            </div>
+                        `;
+                        
+                        chatHistory = [{ role: 'assistant', content: 'Chat compacted. Summary:\n\n' + data.summary }];
+                        addMessageToUI('assistant', chatHistory[0].content, false);
+                        
+                        tokenUsage = data.token_usage || 0;
+                        updateTokenBar();
+                        
+                        localStorage.setItem('chatHistory', JSON.stringify(chatHistory));
+                        localStorage.setItem('tokenUsage', tokenUsage);
+                        
+                        showNotification('Chat successfully compacted', 'success');
+                    } else {
+                        showNotification(data.error || 'Failed to compact chat', 'error');
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    showNotification('Failed to compact chat', 'error');
+                } finally {
+                    hideLoading();
+                }
+            }
+        }
+        
+        // Export chat
+        function exportChat() {
+            const messages = document.querySelectorAll('.message');
+            let exportText = 'Jack\'s AI Chat Export\n';
+            exportText += '========================\n\n';
+            
+            messages.forEach(msg => {
+                const author = msg.querySelector('.message-author').textContent;
+                const time = msg.querySelector('.message-time').textContent;
+                const content = msg.querySelector('.message-bubble').textContent;
+                exportText += `[${time}] ${author}:\n${content}\n\n`;
+            });
+            
+            const blob = new Blob([exportText], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `chat-export-${new Date().toISOString()}.txt`;
+            a.click();
+            
+            showNotification('Chat exported successfully', 'success');
+        }
+        
+        // Insert prompt
+        function insertPrompt(text) {
+            const input = document.getElementById('messageInput');
+            input.value = text + ' ';
+            input.focus();
+            autoResizeTextarea();
+        }
+        
+        // Toggle voice input (placeholder)
+        function toggleVoiceInput() {
+            showNotification('Voice input coming soon!', 'warning');
+        }
+        
+        // Show/hide loading
+        function showLoading() {
+            document.getElementById('loadingOverlay').classList.add('active');
+        }
+        
+        function hideLoading() {
+            document.getElementById('loadingOverlay').classList.remove('active');
+        }
     </script>
 </body>
 </html>
 """
 
-# --- Flask Routes ---
+# API key rotation system
+API_KEYS = []
+current_key_index = 0
 
-@app.route("/", methods=["GET"])
+def get_api_keys():
+    """Get API keys from environment variables"""
+    global API_KEYS
+    for i in range(1, 11):
+        key = os.environ.get(f'GEMINI_API_KEY_{i}')
+        if key:
+            API_KEYS.append(key)
+            API_KEYS_STATUS[key] = {'failures': 0, 'last_used': None}
+    
+    if not API_KEYS:
+        default_key = os.environ.get('GEMINI_API_KEY')
+        if default_key:
+            API_KEYS.append(default_key)
+            API_KEYS_STATUS[default_key] = {'failures': 0, 'last_used': None}
+    
+    if not API_KEYS:
+        print("WARNING: No API keys found! Please set GEMINI_API_KEY environment variables.")
+        API_KEYS.append("YOUR_API_KEY_HERE")
+
+def get_next_api_key():
+    """Rotate through available API keys"""
+    global current_key_index
+    
+    if not API_KEYS:
+        get_api_keys()
+    
+    attempts = 0
+    while attempts < len(API_KEYS):
+        key = API_KEYS[current_key_index]
+        
+        if API_KEYS_STATUS.get(key, {}).get('failures', 0) < 3:
+            API_KEYS_STATUS[key]['last_used'] = datetime.now()
+            current_key_index = (current_key_index + 1) % len(API_KEYS)
+            return key
+        
+        current_key_index = (current_key_index + 1) % len(API_KEYS)
+        attempts += 1
+    
+    for key in API_KEYS:
+        API_KEYS_STATUS[key]['failures'] = 0
+    
+    return API_KEYS[0] if API_KEYS else "YOUR_API_KEY_HERE"
+
+def mark_api_key_failure(api_key):
+    """Mark an API key as having failed"""
+    if api_key in API_KEYS_STATUS:
+        API_KEYS_STATUS[api_key]['failures'] += 1
+
+# System prompts for the AI models
+PROMPT_ENHANCER_SYSTEM = """You are a prompt enhancement specialist. Your job is to take user prompts and make them clearer, more detailed, and more effective for an AI assistant.
+
+Rules:
+1. Preserve the user's original intent completely
+2. Add clarity and context where helpful
+3. Structure the prompt for better AI understanding
+4. Include specific details that will help get a better response
+5. Make the prompt comprehensive but not overly long
+6. If the prompt involves analysis of files or images, specify what kind of analysis would be most helpful
+
+Take the user's prompt and rewrite it to be more effective. Return ONLY the enhanced prompt, nothing else."""
+
+MAIN_AI_SYSTEM = """You are Jack's AI, an ultra-advanced artificial intelligence assistant powered by cutting-edge Gemini 2.5 Pro technology. You are incredibly capable, intelligent, and helpful.
+
+CORE PRINCIPLES:
+
+1. COMPREHENSIVE RESPONSES
+   - Provide extremely detailed, thorough answers
+   - Never use placeholders or shortcuts
+   - Include all necessary code, explanations, and examples
+   - Every response should be production-ready
+
+2. CLARITY AND EDUCATION
+   - Explain complex concepts in simple terms
+   - Use analogies and examples liberally
+   - Break down steps clearly
+   - Write as if teaching someone new to the topic
+
+3. MAXIMUM VALUE
+   - Use the full context window when beneficial
+   - Provide multiple solutions when applicable
+   - Include best practices and recommendations
+   - Anticipate follow-up questions
+
+4. CAPABILITIES
+   - Advanced code generation in any language
+   - Complex document and image analysis
+   - Creative problem solving
+   - Data analysis and visualization
+   - Research and synthesis
+   - Mathematical computations
+
+5. PERSONALITY
+   - Professional yet friendly
+   - Enthusiastic and engaging
+   - Proactive and helpful
+   - Use emojis appropriately 🚀
+
+Remember: The user has unlimited access to your capabilities. Give them exceptional, comprehensive responses that exceed expectations."""
+
+CHAT_COMPACTOR_SYSTEM = """You are a conversation summarizer. Create a comprehensive summary that preserves all important information while reducing token usage.
+
+Requirements:
+1. Keep all key facts, decisions, and outcomes
+2. Maintain chronological flow
+3. Preserve technical details and code
+4. Summarize repetitive discussions efficiently
+5. Include all solutions and answers provided
+6. Make the summary detailed enough for seamless continuation
+
+Create a thorough yet efficient summary."""
+
+def create_ai_client(api_key):
+    """Create an OpenAI client configured for Gemini"""
+    return OpenAI(
+        api_key=api_key,
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+    )
+
+def count_tokens(text):
+    """Estimate token count for text"""
+    return len(text) // 4
+
+def process_file_for_ai(file):
+    """Process uploaded file and convert to AI-readable format"""
+    try:
+        file_content = ""
+        file_type = file.content_type
+        
+        if file_type.startswith('image/'):
+            img = Image.open(file)
+            buffered = BytesIO()
+            img.save(buffered, format=img.format if img.format else 'PNG')
+            img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+            file_content = f"[Image file: {file.filename}]\n[Image data available for analysis]"
+            return file_content, img_base64
+            
+        elif file_type == 'application/pdf':
+            pdf_reader = PyPDF2.PdfReader(file)
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+            file_content = f"[PDF file: {file.filename}]\nContent:\n{text}"
+            
+        elif file_type in ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword']:
+            doc = docx.Document(file)
+            text = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+            file_content = f"[Word document: {file.filename}]\nContent:\n{text}"
+            
+        elif file_type in ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel']:
+            workbook = openpyxl.load_workbook(file)
+            text = ""
+            for sheet_name in workbook.sheetnames:
+                sheet = workbook[sheet_name]
+                text += f"\nSheet: {sheet_name}\n"
+                for row in sheet.iter_rows(values_only=True):
+                    text += "\t".join([str(cell) if cell else "" for cell in row]) + "\n"
+            file_content = f"[Excel file: {file.filename}]\nContent:\n{text}"
+            
+        elif file_type.startswith('text/'):
+            text = file.read().decode('utf-8', errors='ignore')
+            file_content = f"[Text file: {file.filename}]\nContent:\n{text}"
+            
+        else:
+            file_content = f"[File: {file.filename}]\n[Type: {file_type}]\n[Unable to process]"
+        
+        return file_content, None
+        
+    except Exception as e:
+        return f"[Error processing {file.filename}: {str(e)}]", None
+
+# Flask routes - No authentication needed
+@app.route('/')
 def index():
-    """Serves the main HTML page."""
-    if 'session_id' not in session:
-        session['session_id'] = secrets.token_hex(16)
-        conversations[session['session_id']] = {'messages': []}
+    """Main page"""
     return render_template_string(HTML_TEMPLATE)
 
-@app.route("/chat", methods=["POST"])
-def chat():
-    """Handles the chat request, communicates with Gemini, and returns a response."""
+@app.route('/enhance_prompt', methods=['POST'])
+def enhance_prompt():
+    """Enhance user's prompt using AI"""
     try:
-        data = request.get_json(force=True)
-        message = data.get("message", "").strip()
+        data = request.json
+        original_prompt = data.get('prompt', '')
+        session_id = data.get('session_id', 'default')
+        
+        if not original_prompt:
+            return jsonify({'success': False, 'error': 'No prompt provided'}), 400
+        
+        api_key = get_next_api_key()
+        client = create_ai_client(api_key)
+        
+        try:
+            response = client.chat.completions.create(
+                model="gemini-2.5-flash",
+                messages=[
+                    {"role": "system", "content": PROMPT_ENHANCER_SYSTEM},
+                    {"role": "user", "content": original_prompt}
+                ],
+                max_tokens=500,
+                temperature=0.7
+            )
+            
+            enhanced_prompt = response.choices[0].message.content
+            
+            return jsonify({
+                'success': True,
+                'enhanced_prompt': enhanced_prompt
+            }), 200
+            
+        except Exception as api_error:
+            print(f"API error in enhance_prompt: {api_error}")
+            mark_api_key_failure(api_key)
+            return jsonify({
+                'success': True,
+                'enhanced_prompt': original_prompt
+            }), 200
+            
+    except Exception as e:
+        print(f"Enhance prompt error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
-        if not message:
-            return jsonify({"error": "Message cannot be empty."}), 400
-
-        # Ensure session exists
-        session_id = session.get('session_id')
-        if not session_id or session_id not in conversations:
-            session_id = secrets.token_hex(16)
-            session['session_id'] = session_id
-            conversations[session_id] = {'messages': []}
+@app.route('/chat', methods=['POST'])
+def chat():
+    """Handle chat messages with AI"""
+    try:
+        message = request.form.get('message', '')
+        session_id = request.form.get('session_id', 'default')
+        files = request.files.getlist('files')
         
-        conversation_history = conversations[session_id]['messages']
+        # Get or create session
+        if session_id not in CHAT_SESSIONS:
+            CHAT_SESSIONS[session_id] = {
+                'history': [],
+                'token_usage': 0
+            }
         
-        # Add user message to history
-        conversation_history.append({"role": "user", "content": message})
+        session = CHAT_SESSIONS[session_id]
         
-        # Use a system prompt to guide the model's behavior
-        system_prompt = "You are Jack's AI, a helpful and comprehensive assistant. You should provide detailed, well-structured, and complete answers. Never mention you are a model from Google. Be thorough."
+        file_contents = []
+        image_data = None
         
-        messages_for_api = [
-            {"role": "system", "content": system_prompt}
-        ] + conversation_history
-
-        reply = None
-        for attempt in range(len(API_KEYS)):
+        for file in files:
+            if file:
+                content, img_data = process_file_for_ai(file)
+                file_contents.append(content)
+                if img_data:
+                    image_data = img_data
+        
+        full_message = message
+        if file_contents:
+            full_message += "\n\n" + "\n".join(file_contents)
+        
+        messages = [
+            {"role": "system", "content": MAIN_AI_SYSTEM}
+        ]
+        
+        # Add recent history
+        for msg in session['history'][-10:]:
+            messages.append({"role": msg['role'], "content": msg['content']})
+        
+        messages.append({"role": "user", "content": full_message})
+        
+        api_key = get_next_api_key()
+        client = create_ai_client(api_key)
+        
+        max_retries = 3
+        for attempt in range(max_retries):
             try:
-                client = get_next_api_client()
-                
-                # Note: The 'openai' package is used here as a wrapper for the Gemini API endpoint.
-                # We need to map the roles to 'user' and 'model'.
-                gemini_messages = []
-                for msg in messages_for_api:
-                    role = 'model' if msg['role'] == 'assistant' else 'user'
-                    # The Gemini API expects a specific structure.
-                    # This is a simplified approach; for complex cases, mapping needs to be more robust.
-                    if msg['role'] != 'system': # Gemini API doesn't use a 'system' role in the same way
-                         gemini_messages.append({"role": role, "parts": [{"text": msg['content']}]})
-
-                # The endpoint for Gemini via the OpenAI-compatible wrapper is `chat.completions`
                 response = client.chat.completions.create(
-                    model="gemini-1.5-pro",
-                    messages=messages_for_api, # The OpenAI wrapper handles the conversion
-                    temperature=0.7,
+                    model="gemini-2.5-pro",
+                    messages=messages,
+                    max_tokens=8000,
+                    temperature=0.8
                 )
                 
-                if response.choices and response.choices[0].message:
-                    reply = response.choices[0].message.content.strip()
-                    break # Success, exit loop
+                ai_response = response.choices[0].message.content
+                
+                # Update session
+                session['history'].append({"role": "user", "content": message})
+                session['history'].append({"role": "assistant", "content": ai_response})
+                
+                token_usage = session['token_usage']
+                token_usage += count_tokens(full_message) + count_tokens(ai_response)
+                session['token_usage'] = token_usage
+                
+                return jsonify({
+                    'success': True,
+                    'response': ai_response,
+                    'token_usage': token_usage
+                }), 200
                 
             except Exception as api_error:
-                print(f"API attempt {attempt + 1} failed: {str(api_error)}")
-                traceback.print_exc()
-                if attempt == len(API_KEYS) - 1: # If all keys failed
-                    return jsonify({"error": "The AI service is currently unavailable. Please try again later."}), 503
-
-        if reply:
-            # Add assistant response to history
-            conversation_history.append({"role": "assistant", "content": reply})
-            return jsonify({"reply": reply})
-        else:
-            return jsonify({"error": "Failed to get a response from the AI."}), 500
-
+                print(f"API attempt {attempt + 1} failed: {api_error}")
+                mark_api_key_failure(api_key)
+                
+                if attempt < max_retries - 1:
+                    api_key = get_next_api_key()
+                    client = create_ai_client(api_key)
+                else:
+                    return jsonify({
+                        'success': False,
+                        'error': 'AI service temporarily unavailable. Please try again.'
+                    }), 500
+        
     except Exception as e:
-        print(f"An unexpected error occurred in /chat: {e}")
+        print(f"Chat error: {e}")
         traceback.print_exc()
-        return jsonify({"error": "An internal server error occurred."}), 500
+        return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route("/clear_chat", methods=["POST"])
-def clear_chat():
-    """Clears the conversation history for the current session."""
-    session_id = session.get('session_id')
-    if session_id and session_id in conversations:
-        conversations[session_id]['messages'] = []
-    return jsonify({"success": True})
+@app.route('/compact_chat', methods=['POST'])
+def compact_chat():
+    """Compact the chat history to reduce tokens"""
+    try:
+        data = request.json
+        session_id = data.get('session_id', 'default')
+        
+        if session_id not in CHAT_SESSIONS:
+            return jsonify({
+                'success': False,
+                'error': 'No chat history found'
+            }), 400
+        
+        session = CHAT_SESSIONS[session_id]
+        chat_history = session['history']
+        
+        if len(chat_history) < 10:
+            return jsonify({
+                'success': False,
+                'error': 'Chat history too short to compact'
+            }), 400
+        
+        conversation_text = ""
+        for msg in chat_history:
+            role = "User" if msg['role'] == 'user' else "Assistant"
+            conversation_text += f"{role}: {msg['content']}\n\n"
+        
+        api_key = get_next_api_key()
+        client = create_ai_client(api_key)
+        
+        try:
+            response = client.chat.completions.create(
+                model="gemini-2.5-flash",
+                messages=[
+                    {"role": "system", "content": CHAT_COMPACTOR_SYSTEM},
+                    {"role": "user", "content": f"Please summarize this conversation:\n\n{conversation_text}"}
+                ],
+                max_tokens=2000,
+                temperature=0.7
+            )
+            
+            summary = response.choices[0].message.content
+            
+            # Replace history with summary
+            session['history'] = [
+                {"role": "assistant", "content": summary}
+            ]
+            
+            token_usage = count_tokens(summary)
+            session['token_usage'] = token_usage
+            
+            return jsonify({
+                'success': True,
+                'summary': summary,
+                'token_usage': token_usage
+            }), 200
+            
+        except Exception as api_error:
+            print(f"Compact chat API error: {api_error}")
+            mark_api_key_failure(api_key)
+            return jsonify({
+                'success': False,
+                'error': 'Failed to compact chat. Please try again.'
+            }), 500
+            
+    except Exception as e:
+        print(f"Compact chat error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route("/load_conversation", methods=["GET"])
-def load_conversation():
-    """Loads the conversation history for the current session."""
-    session_id = session.get('session_id')
-    if session_id and session_id in conversations:
-        return jsonify(conversations[session_id])
-    return jsonify({"messages": []})
+# Initialize API keys when the app starts
+get_api_keys()
 
-# --- Main Execution ---
-if __name__ == "__main__":
-    # Get port from environment variable, which is required for Render deployment
-    port = int(os.environ.get("PORT", 5000))
-    # Run the app on 0.0.0.0 to be accessible externally
-    app.run(host="0.0.0.0", port=port, debug=False)
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
