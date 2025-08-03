@@ -18,11 +18,9 @@ import mimetypes
 import random
 import string
 
-# Import Flask and related libraries for web framework
 from flask import Flask, render_template_string, request, jsonify
 from werkzeug.utils import secure_filename
 
-# Import AI and HTTP libraries
 from openai import OpenAI
 import httpx  # <-- ADD THIS IMPORT
 
@@ -1934,7 +1932,7 @@ def create_ai_client(api_key):
     http_client = httpx.Client(trust_env=False)
     return OpenAI(
         api_key=api_key,
-        base_url="https://generativelanguage.googleapis.com/v1beta/models",
+        base_url="https://generativelanguage.googleapis.com/v1beta",
         http_client=http_client
     )
 
