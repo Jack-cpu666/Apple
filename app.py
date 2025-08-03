@@ -1253,7 +1253,7 @@ HTML_TEMPLATE = """
                 </div>
                 
                 <div class="sidebar-actions">
-                    <button class="new-chat-btn" onclick="newChat()">
+                    <button class="new-chat-btn" onclick="window.newChat()">
                         <i class="fas fa-plus"></i> New Chat
                     </button>
                 </div>
@@ -1275,19 +1275,19 @@ HTML_TEMPLATE = """
                     </div>
                     
                     <div class="chat-header-actions">
-                        <button class="header-btn" onclick="toggleTheme()">
+                        <button class="header-btn" onclick="window.toggleTheme()">
                             <i class="fas fa-moon" id="themeIcon"></i>
                             <span class="tooltip">Toggle Theme</span>
                         </button>
-                        <button class="header-btn" onclick="compactChat()">
+                        <button class="header-btn" onclick="window.compactChat()">
                             <i class="fas fa-compress"></i>
                             <span class="tooltip">Compact Chat</span>
                         </button>
-                        <button class="header-btn" onclick="exportChat()">
+                        <button class="header-btn" onclick="window.exportChat()">
                             <i class="fas fa-download"></i>
                             <span class="tooltip">Export Chat</span>
                         </button>
-                        <button class="header-btn" onclick="clearChat()">
+                        <button class="header-btn" onclick="window.clearChat()">
                             <i class="fas fa-trash"></i>
                             <span class="tooltip">Clear Chat</span>
                         </button>
@@ -1314,7 +1314,7 @@ HTML_TEMPLATE = """
                                 👋 Welcome! I'm your advanced AI assistant powered by Gemini 2.5 Pro. I can help you with complex tasks, analyze documents, generate code, and much more. How can I assist you today?
                             </div>
                             <div class="message-actions">
-                                <button class="message-action" onclick="copyMessage(this)">
+                                <button class="message-action" onclick="window.copyMessage(this)">
                                     <i class="fas fa-copy"></i> Copy
                                 </button>
                             </div>
@@ -1369,15 +1369,15 @@ HTML_TEMPLATE = """
                                 rows="1"
                             ></textarea>
                             <div class="input-actions">
-                                <button class="input-action-btn" onclick="toggleFileUpload()">
+                                <button class="input-action-btn" onclick="window.toggleFileUpload()">
                                     <i class="fas fa-paperclip"></i>
                                 </button>
-                                <button class="input-action-btn" onclick="toggleVoiceInput()">
+                                <button class="input-action-btn" onclick="window.toggleVoiceInput()">
                                     <i class="fas fa-microphone"></i>
                                 </button>
                             </div>
                         </div>
-                        <button class="send-button" id="sendButton" onclick="sendMessage()">
+                        <button class="send-button" id="sendButton" onclick="window.sendMessage()">
                             <i class="fas fa-paper-plane"></i>
                             <span>Send</span>
                         </button>
@@ -1385,19 +1385,19 @@ HTML_TEMPLATE = """
                     
                     <!-- Quick actions -->
                     <div class="quick-actions">
-                        <button class="quick-action" onclick="insertPrompt('Explain in detail')">
+                        <button class="quick-action" onclick="window.insertPrompt('Explain in detail')">
                             <i class="fas fa-info-circle"></i> Explain
                         </button>
-                        <button class="quick-action" onclick="insertPrompt('Analyze and provide insights')">
+                        <button class="quick-action" onclick="window.insertPrompt('Analyze and provide insights')">
                             <i class="fas fa-chart-bar"></i> Analyze
                         </button>
-                        <button class="quick-action" onclick="insertPrompt('Generate code for')">
+                        <button class="quick-action" onclick="window.insertPrompt('Generate code for')">
                             <i class="fas fa-code"></i> Code
                         </button>
-                        <button class="quick-action" onclick="insertPrompt('Create a comprehensive')">
+                        <button class="quick-action" onclick="window.insertPrompt('Create a comprehensive')">
                             <i class="fas fa-file-alt"></i> Create
                         </button>
-                        <button class="quick-action" onclick="insertPrompt('Solve step by step')">
+                        <button class="quick-action" onclick="window.insertPrompt('Solve step by step')">
                             <i class="fas fa-calculator"></i> Solve
                         </button>
                     </div>
@@ -1414,21 +1414,21 @@ HTML_TEMPLATE = """
                 <p class="modal-subtitle">Choose how you'd like to ask your question</p>
             </div>
             
-            <div class="prompt-option" id="originalOption" onclick="selectPromptOption('original')">
+            <div class="prompt-option" id="originalOption" onclick="window.selectPromptOption('original')">
                 <div class="prompt-option-title">Original Prompt</div>
                 <div class="prompt-option-text" id="originalPromptText"></div>
             </div>
             
-            <div class="prompt-option selected" id="enhancedOption" onclick="selectPromptOption('enhanced')">
+            <div class="prompt-option selected" id="enhancedOption" onclick="window.selectPromptOption('enhanced')">
                 <div class="prompt-option-title">Enhanced Prompt (Recommended)</div>
                 <div class="prompt-option-text" id="enhancedPromptText"></div>
             </div>
             
             <div class="modal-actions">
-                <button class="modal-btn modal-btn-secondary" onclick="closePromptModal()">
+                <button class="modal-btn modal-btn-secondary" onclick="window.closePromptModal()">
                     Cancel
                 </button>
-                <button class="modal-btn modal-btn-primary" onclick="confirmPromptSelection()">
+                <button class="modal-btn modal-btn-primary" onclick="window.confirmPromptSelection()">
                     Use Selected Prompt
                 </button>
             </div>
@@ -1436,7 +1436,7 @@ HTML_TEMPLATE = """
     </div>
     
     <!-- File input (hidden) -->
-    <input type="file" id="fileInput" multiple style="display: none;">
+    <input type="file" id="fileInput" multiple style="display: none;" onchange="window.handleFileSelect(event)">
     
     <script>
         // Application state
@@ -1559,6 +1559,26 @@ HTML_TEMPLATE = """
         document.addEventListener('DOMContentLoaded', function() {
             console.log('Initializing Jack\'s AI...');
             
+            // Define all functions globally before use
+            window.sendMessage = sendMessage;
+            window.toggleFileUpload = toggleFileUpload;
+            window.toggleVoiceInput = toggleVoiceInput;
+            window.handleFileSelect = handleFileSelect;
+            window.removeFile = removeFile;
+            window.insertPrompt = insertPrompt;
+            window.newChat = newChat;
+            window.clearChat = clearChat;
+            window.compactChat = compactChat;
+            window.exportChat = exportChat;
+            window.toggleTheme = toggleTheme;
+            window.copyMessage = copyMessage;
+            window.selectPromptOption = selectPromptOption;
+            window.closePromptModal = closePromptModal;
+            window.confirmPromptSelection = confirmPromptSelection;
+            window.showNotification = showNotification;
+            window.showLoading = showLoading;
+            window.hideLoading = hideLoading;
+            
             const messageInput = document.getElementById('messageInput');
             if (messageInput) {
                 messageInput.addEventListener('input', autoResizeTextarea);
@@ -1573,7 +1593,9 @@ HTML_TEMPLATE = """
             // File input handler
             const fileInput = document.getElementById('fileInput');
             if (fileInput) {
-                fileInput.addEventListener('change', handleFileSelect);
+                fileInput.addEventListener('change', function(e) {
+                    handleFileSelect(e);
+                });
             }
             
             // Initialize
@@ -1714,6 +1736,10 @@ HTML_TEMPLATE = """
             
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${role}`;
+            
+            // Escape content for HTML
+            const escapedContent = content.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+            
             messageDiv.innerHTML = `
                 <div class="message-avatar">
                     <i class="fas fa-${role === 'user' ? 'user' : 'robot'}"></i>
@@ -1723,9 +1749,9 @@ HTML_TEMPLATE = """
                         <span class="message-author">${role === 'user' ? 'You' : "Jack's AI"}</span>
                         <span class="message-time">${time}</span>
                     </div>
-                    <div class="message-bubble">${content.replace(/\n/g, '<br>')}</div>
+                    <div class="message-bubble">${escapedContent}</div>
                     <div class="message-actions">
-                        <button class="message-action" onclick="copyMessage(this)">
+                        <button class="message-action" onclick="window.copyMessage(this)">
                             <i class="fas fa-copy"></i> Copy
                         </button>
                     </div>
@@ -1793,7 +1819,7 @@ HTML_TEMPLATE = """
                 fileItem.innerHTML = `
                     <i class="fas fa-file"></i>
                     <span>${file.name}</span>
-                    <i class="fas fa-times file-remove" onclick="removeFile('${file.name}')"></i>
+                    <i class="fas fa-times file-remove" onclick="window.removeFile('${file.name.replace(/'/g, "\\'")}')" style="cursor: pointer;"></i>
                 `;
                 
                 preview.appendChild(fileItem);
