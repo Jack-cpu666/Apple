@@ -2080,10 +2080,10 @@ def enhance_prompt():
         
         try:
             response = client.completions.create(
-                model="gemini-1.5-flash-latest", # Using a completion model for this simple task
+                model="gemini-2.5-flash", # Using a completion model for this simple task
                 prompt=f"{PROMPT_ENHANCER_SYSTEM}\\n\\nUser Prompt: \"{original_prompt}\"\\n\\nEnhanced Prompt:",
-                max_tokens=500,
-                temperature=0.7
+                max_tokens=50000,
+                temperature=1
             )
             
             enhanced_prompt = response.choices[0].text.strip()
@@ -2153,10 +2153,10 @@ def chat():
         for attempt in range(max_retries):
             try:
                 response = client.chat.completions.create(
-                    model="gemini-1.5-pro-latest",
+                    model="gemini-2.5-pro",
                     messages=messages,
-                    max_tokens=8000,
-                    temperature=0.8
+                    max_tokens=6000,
+                    temperature=1
                 )
                 
                 ai_response = response.choices[0].message.content
