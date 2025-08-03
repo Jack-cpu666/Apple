@@ -1,26 +1,9 @@
-# Core Web Framework
-Flask==3.0.3
-Werkzeug==3.0.3
-
-# AI/ML Libraries
-openai==1.35.3
-tiktoken==0.7.0
-
-# File Processing Libraries
-Pillow==10.4.0           # For image processing (compatible with Python 3.13)
-PyPDF2==3.0.1           # For PDF file reading
-python-docx==1.1.2      # For Word document processing
-openpyxl==3.1.5         # For Excel file processing
-
-# Security
-python-dotenv==1.0.1    # For environment variables
-
-# Production Server
-gunicorn==22.0.0        # Production WSGI server for Render
-
-# Additional Dependencies (these will be installed automatically with openai)
-# requests
-# certifi
-# charset-normalizer
-# idna
-# urllib3
+Flask==3.0.0
+Werkzeug==3.0.1
+openai==1.12.0
+tiktoken==0.5.2
+Pillow==10.2.0
+PyPDF2==3.0.1
+python-docx==1.1.0
+openpyxl==3.1.2
+gunicorn==21.2.0
