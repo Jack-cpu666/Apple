@@ -1,9 +1,16 @@
-Flask==3.0.0
-Werkzeug==3.0.1
-openai==1.12.0
-Pillow==10.2.0
-PyPDF2==3.0.1
-python-docx==1.1.0
-openpyxl==3.1.2
-gunicorn==21.2.0
+flask
+openai
 httpx
+Pillow
+PyPDF2
+python-docx
+openpyxl
+werkzeug
+pandas          # Advanced spreadsheet processing
+numpy           # Data analysis
+beautifulsoup4  # HTML parsing
+markdown        # Markdown rendering
+pygments        # Code syntax highlighting
+flask-cors      # CORS support
+flask-limiter   # Rate limiting
+flask-caching   # Response caching
