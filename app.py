@@ -522,13 +522,23 @@ class PromptEngineer:
             prompt += "\n\nPlease include relevant examples to illustrate your points."
         return prompt
     
-    def create_system_prompt(self, mode: ChatMode, custom_instructions: str = "") -> str:
-        """Create a system prompt based on mode and custom instructions"""
+    def create_system_prompt(self, mode: ChatMode, custom_instructions: str = "", advanced_coding: bool = False) -> str:
+        """Create a system prompt based on mode, custom instructions, and advanced coding flag."""
         base_prompt = self.templates.get(mode, self.templates[ChatMode.BALANCED])
-        
+
+        # Add a powerful instruction if advanced coding is enabled
+        if advanced_coding:
+            base_prompt += (
+                "\n\n**CRITICAL INSTRUCTION: ADVANCED CODING MODE IS ACTIVE.** "
+                "You MUST provide complete, production-ready, and enterprise-grade implementations. "
+                "This means no placeholders, no shortcuts, and no 'you can add this later' comments. "
+                "Write full, functional code with all necessary imports, comprehensive error handling, "
+                "documentation, and examples. Your output should be ready to be deployed."
+            )
+
         if custom_instructions:
-            return f"{base_prompt}\n\nAdditional instructions: {custom_instructions}"
-        
+            base_prompt += f"\n\nAdditional user instructions: {custom_instructions}"
+
         return base_prompt
 
 # ============= ENHANCED FILE PROCESSING =============
