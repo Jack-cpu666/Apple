@@ -829,11 +829,11 @@ Sample Data ({sample_rows} rows):
         
         numbered_code = '\n'.join([f"{i+1:5d} | {line}" for i, line in enumerate(lines[:1000])])
         
-                        imports_str = '\n'.join([f"  - {imp}" for imp in imports[:10]]) if imports else ""
-                functions_str = '\n'.join([f"  - {func}()" for func in functions[:10]]) if functions else ""
-                classes_str = '\n'.join([f"  - {cls}" for cls in classes[:10]]) if classes else ""
-                
-                content = f"""[Code File: {filename}]
+        imports_str = '\n'.join([f"  - {imp}" for imp in imports[:10]]) if imports else ""
+        functions_str = '\n'.join([f"  - {func}()" for func in functions[:10]]) if functions else ""
+        classes_str = '\n'.join([f"  - {cls}" for cls in classes[:10]]) if classes else ""
+        
+        content = f"""[Code File: {filename}]
 Language: {language}
 Lines: {line_count:,}
 File Size: {len(code):,} bytes
@@ -870,33 +870,6 @@ Code (first 1000 lines):
         }
         
         return content, None, metadata
-    
-    async def _process_data(self, file, filename: str) -> Tuple[str, None, Dict]:
-        content_raw = file.read().decode('utf-8', errors='ignore')
-        ext = filename.lower().split('.')[-1]
-        
-        if ext == 'json':
-            try:
-                data = json.loads(content_raw)
-                pretty = json.dumps(data, indent=2, ensure_ascii=False)[:50000]
-                
-                structure = self._analyze_json_structure(data)
-                
-                metadata = {
-                    "type": "json",
-                    "valid": True,
-                    "structure": structure,
-                    "size": len(content_raw)
-                }
-                
-                content = f"""[JSON File: {filename}]
-Valid: ✓
-Size: {len(content_raw):,} bytes
-Structure: {structure['type']}
-
-Content:
-{pretty}
-"""
             except json.JSONDecodeError as e:
                 metadata = {
                     "type": "json",
@@ -3813,5 +3786,6 @@ if __name__ == '__main__':
     else:
         print(f"Starting Jack's AI Ultra Enhanced Edition on port {port} (Development Mode)")
         app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
