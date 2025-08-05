@@ -1,5 +1,5 @@
 gunicorn
-flask
+Flask[async]
 openai
 httpx
 Pillow
