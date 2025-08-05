@@ -962,153 +962,123 @@ Content:
         
         return content, None, metadata
     
-    async def _process_web(self, file, filename: str) -> Tuple[str, None, Dict]:
+    async def _process_data(self, file, filename: str) -> Tuple[str, None, Dict]:
         content_raw = file.read().decode('utf-8', errors='ignore')
         ext = filename.lower().split('.')[-1]
         
-        if ext in ['html', 'htm']:
-            soup = BeautifulSoup(content_raw, 'html.parser')
-            
-            title = soup.title.string if soup.title else None
-            
-            scripts = soup.find_all('script')
-            styles = soup.find_all('style')
-            links = soup.find_all('a')
-            images = soup.find_all('img')
-            forms = soup.find_all('form')
-            
-            text_content = soup.get_text(separator='\n', strip=True)[:10000]
-            
-            metadata = {
-                "type": "html",
-                "title": title,
-                "structure": {
-                    "scripts": len(scripts),
-                    "styles": len(styles),
-                    "links": len(links),
-                    "images": len(images),
-                    "forms": len(forms)
-                },
-                "meta_tags": {}
-            }
-            
-            for meta in soup.find_all('meta'):
-                name = meta.get('name') or meta.get('property')
-                content = meta.get('content')
-                if name and content:
-                    metadata["meta_tags"][name] = content[:100]
-            
-            meta_tags_str = '\n'.join([f"  {name}: {value}" for name, value in list(metadata["meta_tags"].items())[:10]])
-            
-            content = f"""[HTML File: {filename}]
-Title: {title or 'No title'}
-Scripts: {len(scripts)}, Styles: {len(styles)}, Links: {len(links)}, Images: {len(images)}, Forms: {len(forms)}
+        if ext == 'json':
+            try:
+                data = json.loads(content_raw)
+                pretty = json.dumps(data, indent=2, ensure_ascii=False)[:50000]
+                
+                structure = self._analyze_json_structure(data)
+                
+                metadata = {
+                    "type": "json",
+                    "valid": True,
+                    "structure": structure,
+                    "size": len(content_raw)
+                }
+                
+                content = f"""[JSON File: {filename}]
+Valid: ✓
+Size: {len(content_raw):,} bytes
+Structure: {structure['type']}
 
-Meta Tags:
-{meta_tags_str}
+Content:
+{pretty}
+"""
+            except json.JSONDecodeError as e:
+                metadata = {
+                    "type": "json",
+                    "valid": False,
+                    "error": str(e),
+                    "size": len(content_raw)
+                }
+                
+                content = f"""[JSON File: {filename}]
+Valid: ✗
+Error: {str(e)}
+Size: {len(content_raw):,} bytes
 
-Text Content:
-{text_content}
-
-HTML Structure:
-{str(soup.prettify()[:5000])}
+Raw Content:
+{content_raw[:10000]}
 """
         
-        elif ext in ['css', 'scss', 'sass', 'less']:
-            lines = content_raw.splitlines()
-            
-            selectors = []
-            for line in lines:
-                line = line.strip()
-                if line and not line.startswith(('/*', '*', '//')) and '{' in line:
-                    selector = line.split('{')[0].strip()
-                    if selector:
-                        selectors.append(selector)
+        elif ext in ['yaml', 'yml']:
+            lines = content_raw.split('\n')
             
             metadata = {
-                "type": ext,
+                "type": "yaml",
                 "lines": len(lines),
-                "selectors": len(selectors),
                 "size": len(content_raw)
             }
             
-            selectors_str = '\n'.join([f"  - {sel}" for sel in selectors[:50]])
-            
-            content = f"""[Stylesheet: {filename}]
-Type: {ext.upper()}
+            content = f"""[YAML File: {filename}]
 Lines: {len(lines):,}
-Selectors: {len(selectors):,}
-
-Selectors Found:
-{selectors_str}
+Size: {len(content_raw):,} bytes
 
 Content:
+{content_raw[:50000]}
+"""
+        
+        elif ext == 'xml':
+            try:
+                soup = BeautifulSoup(content_raw, 'xml')
+                pretty = soup.prettify()[:50000]
+                
+                root_tag = soup.find()
+                tag_count = len(soup.find_all())
+                
+                metadata = {
+                    "type": "xml",
+                    "valid": True,
+                    "root_tag": root_tag.name if root_tag else None,
+                    "total_tags": tag_count,
+                    "size": len(content_raw)
+                }
+                
+                content = f"""[XML File: {filename}]
+Valid: ✓
+Root Tag: {root_tag.name if root_tag else 'None'}
+Total Tags: {tag_count:,}
+Size: {len(content_raw):,} bytes
+
+Content:
+{pretty}
+"""
+            except Exception as e:
+                metadata = {
+                    "type": "xml",
+                    "valid": False,
+                    "error": str(e),
+                    "size": len(content_raw)
+                }
+                
+                content = f"""[XML File: {filename}]
+Valid: ✗
+Error: {str(e)}
+
+Raw Content:
 {content_raw[:50000]}
 """
         
         else:
             metadata = {
                 "type": ext,
-                "size": len(content_raw)
+                "size": len(content_raw),
+                "lines": len(content_raw.splitlines())
             }
             
-            content = f"""[Web File: {filename}]
-Type: {ext.upper()}
+            content = f"""[Data File: {filename}]
+Format: {ext.upper()}
+Size: {len(content_raw):,} bytes
 
 Content:
 {content_raw[:50000]}
 """
         
         return content, None, metadata
-    
-    async def _process_archive(self, file, filename: str) -> Tuple[str, None, Dict]:
-        return f"[Archive File: {filename}]\nArchive processing requires extraction. Please extract files first.", None, {"type": "archive", "filename": filename}
-    
-    async def _process_notebook(self, file, filename: str) -> Tuple[str, None, Dict]:
-        try:
-            notebook_content = json.loads(file.read().decode('utf-8'))
-            
-            cells = notebook_content.get('cells', [])
-            code_cells = [cell for cell in cells if cell.get('cell_type') == 'code']
-            markdown_cells = [cell for cell in cells if cell.get('cell_type') == 'markdown']
-            
-            total_code = ""
-            total_markdown = ""
-            
-            for cell in code_cells:
-                source = cell.get('source', [])
-                if isinstance(source, list):
-                    source = ''.join(source)
-                total_code += source + "\n\n"
-            
-            for cell in markdown_cells:
-                source = cell.get('source', [])
-                if isinstance(source, list):
-                    source = ''.join(source)
-                total_markdown += source + "\n\n"
-            
-            metadata = {
-                "type": "jupyter_notebook",
-                "total_cells": len(cells),
-                "code_cells": len(code_cells),
-                "markdown_cells": len(markdown_cells),
-                "kernel": notebook_content.get('metadata', {}).get('kernelspec', {}).get('display_name', 'Unknown')
-            }
-            
-            content = f"""[Jupyter Notebook: {filename}]
-Total Cells: {len(cells)}
-Code Cells: {len(code_cells)}
-Markdown Cells: {len(markdown_cells)}
-Kernel: {metadata['kernel']}
-
-Markdown Content:
-{total_markdown[:25000]}
-
-Code Content:
-{total_code[:25000]}
-"""
-            
-            return content, None, metadata
             
         except Exception as e:
             return f"[Error processing notebook {filename}: {str(e)}]", None, {"error": str(e)}
@@ -3786,6 +3756,7 @@ if __name__ == '__main__':
     else:
         print(f"Starting Jack's AI Ultra Enhanced Edition on port {port} (Development Mode)")
         app.run(host='0.0.0.0', port=port, debug=True)
+
 
 
 
