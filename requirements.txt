@@ -46,9 +46,7 @@ python-barcode[images]
 svgwrite
 
 # -- Machine Learning & NLP (CPU VERSION) --
-# Using --extra-index-url to also search the PyTorch CPU repository. This is correct.
---extra-index-url https://download.pytorch.org/whl/cpu
-torch
+# Note: Removed torch and heavy ML dependencies to reduce footprint
 transformers
 SpeechRecognition
 textstat
@@ -59,9 +57,6 @@ soundfile
 # -- Specialized Scientific Libraries --
 # WARNING: These are large and increase build times. Remove any you don't need.
 opencv-python-headless
-h5py
-netCDF4
-astropy
 biopython
 pydicom
 nibabel
