@@ -1,30 +1,27 @@
-# --- Web Framework & Server ---
+# -- Web Framework & Server --
 gunicorn
 Flask[async]
-flask-cors
-flask-limiter
-flask-caching
+Flask-Cors
+Flask-Limiter
+Flask-Caching
 werkzeug
 markupsafe
 
-# --- Core AI & Data Science ---
+# -- Core AI & Data Science --
 openai
 httpx
-pytesseract
-pymol
-pytraj
 pandas
 numpy
+scikit-learn
 
-# --- File Processing & Parsing ---
+# -- File Processing & Parsing --
 Pillow
 PyPDF2
-librosa 
 python-docx
 openpyxl
 beautifulsoup4
-markdown
-pygments
+Markdown
+Pygments
 python-magic
 chardet
 aiofiles
@@ -47,10 +44,20 @@ qrcode[pil]
 python-barcode[images]
 svgwrite
 
-# --- Specialized Scientific Libraries (USE WITH CAUTION) ---
-# NOTE: These are large. Ensure you absolutely need them for deployment.
+# -- Machine Learning & NLP (CPU VERSION) --
+# Using --extra-index-url to also search the PyTorch CPU repository. This is correct.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+transformers
+SpeechRecognition
+textstat
+nltk
+librosa
+soundfile
+
+# -- Specialized Scientific Libraries --
+# WARNING: These are large and increase build times. Remove any you don't need.
 opencv-python-headless
-scikit-learn
 h5py
 netCDF4
 astropy
@@ -60,21 +67,20 @@ nibabel
 SimpleITK
 trimesh
 open3d
+MDAnalysis
 
-# --- Machine Learning & NLP (CPU VERSION) ---
-# Using --extra-index-url to add the PyTorch CPU repository
-# without removing the default PyPI index. This is the correct way.
---extra-index-url https://download.pytorch.org/whl/cpu
-torch
-transformers
-SpeechRecognition
-textstat
-nltk
+# -- Visual & Geospatial Libraries --
+# WARNING: These are VERY large. If your app can run without them, REMOVE them.
+matplotlib
+seaborn
+plotly
+networkx
+wordcloud
+folium
+geopandas
+rasterio
+xarray
 
-# --- Utilities ---
+# -- Utilities --
 PyJWT
 redis
-
-
-
-
