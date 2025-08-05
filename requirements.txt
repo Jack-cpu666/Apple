@@ -11,6 +11,8 @@ markupsafe
 openai
 httpx
 pytesseract
+import pymol
+import pytraj
 pandas
 numpy
 
@@ -72,5 +74,6 @@ nltk
 # --- Utilities ---
 PyJWT
 redis
+
 
 
