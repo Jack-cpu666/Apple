@@ -17,6 +17,7 @@ numpy
 # --- File Processing & Parsing ---
 Pillow
 PyPDF2
+librosa 
 python-docx
 openpyxl
 beautifulsoup4
@@ -71,4 +72,5 @@ nltk
 # --- Utilities ---
 PyJWT
 redis
+
 
