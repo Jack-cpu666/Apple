@@ -95,8 +95,13 @@ import geopandas as gpd
 import rasterio
 import xarray as xr
 import Bio.SeqIO
-import rdkit
-from rdkit import Chem
+try:
+    import rdkit
+    from rdkit import Chem
+    RDKIT_AVAILABLE = True
+except ImportError:
+    RDKIT_AVAILABLE = False
+    print("Warning: rdkit not available. Chemistry processing features will be limited.")
 import pydicom
 import nibabel as nib
 
@@ -3818,23 +3823,28 @@ class UltraFileProcessor:
                 content += f"Residues: {len(residues)}\n"
             
             elif ext in ['mol', 'mol2', 'sdf']:
-                mol = Chem.MolFromMolFile(attachment.path) if ext == 'mol' else Chem.MolFromMol2File(attachment.path)
-                
-                if mol:
-                    attachment.metadata.update({
-                        "format": ext.upper(),
-                        "atoms": mol.GetNumAtoms(),
-                        "bonds": mol.GetNumBonds(),
-                        "molecular_weight": Chem.Descriptors.MolWt(mol),
-                        "formula": Chem.rdMolDescriptors.CalcMolFormula(mol)
-                    })
+                if RDKIT_AVAILABLE:
+                    mol = Chem.MolFromMolFile(attachment.path) if ext == 'mol' else Chem.MolFromMol2File(attachment.path)
                     
+                    if mol:
+                        attachment.metadata.update({
+                            "format": ext.upper(),
+                            "atoms": mol.GetNumAtoms(),
+                            "bonds": mol.GetNumBonds(),
+                            "molecular_weight": Chem.Descriptors.MolWt(mol),
+                            "formula": Chem.rdMolDescriptors.CalcMolFormula(mol)
+                        })
+                        
+                        content = f"[Molecule File: {attachment.filename}]\n"
+                        content += f"Format: {ext.upper()}\n"
+                        content += f"Atoms: {mol.GetNumAtoms()}\n"
+                        content += f"Bonds: {mol.GetNumBonds()}\n"
+                        content += f"Formula: {Chem.rdMolDescriptors.CalcMolFormula(mol)}\n"
+                        content += f"Molecular Weight: {Chem.Descriptors.MolWt(mol):.2f}\n"
+                else:
                     content = f"[Molecule File: {attachment.filename}]\n"
                     content += f"Format: {ext.upper()}\n"
-                    content += f"Atoms: {mol.GetNumAtoms()}\n"
-                    content += f"Bonds: {mol.GetNumBonds()}\n"
-                    content += f"Formula: {Chem.rdMolDescriptors.CalcMolFormula(mol)}\n"
-                    content += f"Molecular Weight: {Chem.Descriptors.MolWt(mol):.2f}\n"
+                    content += "Note: RDKit not available - molecular analysis features disabled\n"
             
             elif ext == 'fasta':
                 sequences = []
