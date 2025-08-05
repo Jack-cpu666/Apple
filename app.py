@@ -57,8 +57,13 @@ from pygments.lexers import get_lexer_by_name, guess_lexer
 from pygments.formatters import HtmlFormatter
 import pytesseract
 import cv2
-import librosa
-import soundfile as sf
+try:
+    import librosa
+    import soundfile as sf
+    AUDIO_PROCESSING_AVAILABLE = True
+except ImportError:
+    AUDIO_PROCESSING_AVAILABLE = False
+    print("Warning: librosa not available. Audio processing features will be limited.")
 import speech_recognition as sr
 import textstat
 import nltk
@@ -236,6 +241,7 @@ class ProcessingStatus(Enum):
     QUEUED = "queued"
 
 class AIModel(Enum):
+    GEMINI_25_PRO = "gemini-2.5-pro"
     GEMINI_2_FLASH_EXP = "gemini-2.0-flash-exp"
     GEMINI_2_FLASH_THINKING = "gemini-2.0-flash-thinking-exp"
     GEMINI_15_PRO = "gemini-1.5-pro"
@@ -3031,6 +3037,11 @@ class UltraFileProcessor:
     
     async def _process_audio(self, attachment: Attachment) -> Attachment:
         try:
+            if not AUDIO_PROCESSING_AVAILABLE:
+                attachment.error = "Audio processing libraries not available"
+                attachment.extracted_text = f"[Audio file: {attachment.filename}] - Processing not available"
+                return attachment
+                
             audio_data, sample_rate = librosa.load(attachment.path, sr=None)
             duration = len(audio_data) / sample_rate
             
@@ -4714,6 +4725,7 @@ ULTIMATE_HTML_TEMPLATE = r"""
             position: absolute;
             inset: 0;
             overflow: hidden;
+            pointer-events: none;
         }
         
         .particle {
@@ -4754,6 +4766,7 @@ ULTIMATE_HTML_TEMPLATE = r"""
                 radial-gradient(ellipse at 50% 50%, rgba(236, 72, 153, 0.1) 0%, transparent 70%);
             filter: blur(40px);
             animation: gradient-shift 30s ease-in-out infinite;
+            pointer-events: none;
         }
         
         @keyframes gradient-shift {
@@ -4771,6 +4784,7 @@ ULTIMATE_HTML_TEMPLATE = r"""
                 linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
             background-size: 50px 50px;
             animation: grid-move 60s linear infinite;
+            pointer-events: none;
         }
         
         @keyframes grid-move {
