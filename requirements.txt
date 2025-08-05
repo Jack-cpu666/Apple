@@ -1,34 +1,30 @@
+# --- Web Framework & Server ---
 gunicorn
 Flask[async]
+flask-cors
+flask-limiter
+flask-caching
+werkzeug
+markupsafe
+
+# --- Core AI & Data Science ---
 openai
 httpx
+pandas
+numpy
+
+# --- File Processing & Parsing ---
 Pillow
 PyPDF2
 python-docx
 openpyxl
-werkzeug
-pandas
-numpy
 beautifulsoup4
 markdown
 pygments
-flask-cors
-flask-limiter
-flask-caching
-redis
-PyJWT
 python-magic
 chardet
 aiofiles
-pytesseract
-opencv-python-headless
-librosa
-soundfile
-SpeechRecognition
-textstat
-nltk
-transformers
-torch
+PyMuPDF  # for import fitz
 pdfplumber
 camelot-py[cv]
 tabula-py
@@ -46,25 +42,30 @@ pyzbar
 qrcode[pil]
 python-barcode[images]
 svgwrite
-PyMuPDF
-matplotlib
-seaborn
-plotly
-networkx
-wordcloud
-folium
-geopandas
-rasterio
-xarray
+
+# --- Specialized Scientific Libraries (USE WITH CAUTION) ---
+# NOTE: These are large. Ensure you absolutely need them for deployment.
+opencv-python-headless  # For cv2
+scikit-learn # For KMeans clustering in file processor
 h5py
 netCDF4
 astropy
 biopython
-rdkit
 pydicom
 nibabel
 SimpleITK
 trimesh
 open3d
-MDAnalysis
-odfpy
+
+# --- Machine Learning & NLP (CPU VERSION) ---
+# Using CPU-only torch to drastically reduce slug size
+--index-url https://download.pytorch.org/whl/cpu
+torch
+transformers
+SpeechRecognition
+textstat
+nltk
+
+# --- Utilities ---
+PyJWT  # for import jwt
+redis # Your code imports this but doesn't appear to use it. Remove if unused.
