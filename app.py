@@ -1286,6 +1286,11 @@ HTML_TEMPLATE = """
             box-sizing: border-box;
         }
         
+        /* Ensure interactive elements are always clickable */
+        button, input, select, textarea, a, [role="button"], .clickable {
+            pointer-events: auto !important;
+        }
+        
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
             background: var(--bg-primary);
@@ -2316,11 +2321,13 @@ HTML_TEMPLATE = """
             justify-content: center;
             z-index: 1000;
             padding: 20px;
+            pointer-events: none;
         }
         
         .modal-overlay.active {
             display: flex;
             animation: fadeIn 0.3s;
+            pointer-events: auto;
         }
         
         .modal-content {
@@ -2420,10 +2427,12 @@ HTML_TEMPLATE = """
             align-items: center;
             justify-content: center;
             z-index: 9999;
+            pointer-events: none;
         }
         
         .loading-overlay.active {
             display: flex;
+            pointer-events: auto;
         }
         
         .loading-spinner {
@@ -2683,9 +2692,13 @@ HTML_TEMPLATE = """
         };
         
         document.addEventListener('DOMContentLoaded', function() {
+            hideLoadingOverlay();
             initializeApp();
             setupEventListeners();
             loadSettings();
+            
+            // Safety mechanism to hide loading overlay after 3 seconds if still visible
+            setTimeout(hideLoadingOverlay, 3000);
         });
         
         function initializeApp() {
@@ -3013,6 +3026,22 @@ Select a mode above or toggle Advanced Mode for enhanced responses. How can I as
         
         function hideTypingIndicator() {
             document.getElementById('typingIndicator').classList.remove('active');
+        }
+        
+        function hideLoadingOverlay() {
+            const overlay = document.getElementById('loadingOverlay');
+            if (overlay) {
+                overlay.classList.remove('active');
+                overlay.style.display = 'none';
+            }
+        }
+        
+        function showLoadingOverlay() {
+            const overlay = document.getElementById('loadingOverlay');
+            if (overlay) {
+                overlay.classList.add('active');
+                overlay.style.display = 'flex';
+            }
         }
         
         function updateTokenDisplay() {
