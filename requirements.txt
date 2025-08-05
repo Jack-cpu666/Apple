@@ -16,3 +16,4 @@ flask-cors      # CORS support
 flask-limiter   # Rate limiting
 flask-caching   # Response caching
 redis
+PyJWT
