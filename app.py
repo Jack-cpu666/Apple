@@ -751,16 +751,19 @@ class EnhancedFileProcessor:
             sample_rows = min(100, len(df))
             sample = df.head(sample_rows).to_string(max_rows=100, max_cols=20)
             
-            content = f"""[Spreadsheet: {filename}]
+                            dtypes_str = '\n'.join([f"  {col}: {dtype}" for col, dtype in list(summary['dtypes'].items())[:10]])
+                stats_str = '\n'.join([f"  {col}: mean={stats[col]['mean']:.2f}, std={stats[col]['std']:.2f}, min={stats[col]['min']:.2f}, max={stats[col]['max']:.2f}" for col in list(stats.keys())[:5]]) if stats else "  No numeric columns"
+                
+                content = f"""[Spreadsheet: {filename}]
 Rows: {summary['rows']:,}, Columns: {summary['columns']}
 Memory Usage: {summary['memory_usage']}
 Columns: {', '.join(summary['columns_list'][:20])}{'...' if len(summary['columns_list']) > 20 else ''}
 
 Data Types:
-{chr(10).join([f"  {col}: {dtype}" for col, dtype in list(summary['dtypes'].items())[:10]])}
+{dtypes_str}
 
 Numeric Column Statistics:
-{chr(10).join([f"  {col}: mean={stats[col]['mean']:.2f}, std={stats[col]['std']:.2f}, min={stats[col]['min']:.2f}, max={stats[col]['max']:.2f}" for col in list(stats.keys())[:5]]) if stats else "  No numeric columns"}
+{stats_str}
 
 Sample Data ({sample_rows} rows):
 {sample}
@@ -826,7 +829,11 @@ Sample Data ({sample_rows} rows):
         
         numbered_code = '\n'.join([f"{i+1:5d} | {line}" for i, line in enumerate(lines[:1000])])
         
-        content = f"""[Code File: {filename}]
+                        imports_str = '\n'.join([f"  - {imp}" for imp in imports[:10]]) if imports else ""
+                functions_str = '\n'.join([f"  - {func}()" for func in functions[:10]]) if functions else ""
+                classes_str = '\n'.join([f"  - {cls}" for cls in classes[:10]]) if classes else ""
+                
+                content = f"""[Code File: {filename}]
 Language: {language}
 Lines: {line_count:,}
 File Size: {len(code):,} bytes
@@ -837,13 +844,13 @@ Structure Analysis:
   Classes: {len(classes)}
 
 {f"Imports ({len(imports[:10])}):" if imports else ""}
-{chr(10).join([f"  - {imp}" for imp in imports[:10]])}
+{imports_str}
 
 {f"Functions ({len(functions[:10])}):" if functions else ""}
-{chr(10).join([f"  - {func}()" for func in functions[:10]])}
+{functions_str}
 
 {f"Classes ({len(classes[:10])}):" if classes else ""}
-{chr(10).join([f"  - {cls}" for cls in classes[:10]])}
+{classes_str}
 
 Code (first 1000 lines):
 {numbered_code}
@@ -1018,12 +1025,14 @@ Content:
                 if name and content:
                     metadata["meta_tags"][name] = content[:100]
             
+            meta_tags_str = '\n'.join([f"  {name}: {value}" for name, value in list(metadata["meta_tags"].items())[:10]])
+            
             content = f"""[HTML File: {filename}]
 Title: {title or 'No title'}
 Scripts: {len(scripts)}, Styles: {len(styles)}, Links: {len(links)}, Images: {len(images)}, Forms: {len(forms)}
 
 Meta Tags:
-{chr(10).join([f"  {name}: {value}" for name, value in list(metadata["meta_tags"].items())[:10]])}
+{meta_tags_str}
 
 Text Content:
 {text_content}
@@ -1050,13 +1059,15 @@ HTML Structure:
                 "size": len(content_raw)
             }
             
+            selectors_str = '\n'.join([f"  - {sel}" for sel in selectors[:50]])
+            
             content = f"""[Stylesheet: {filename}]
 Type: {ext.upper()}
 Lines: {len(lines):,}
 Selectors: {len(selectors):,}
 
 Selectors Found:
-{chr(10).join([f"  - {sel}" for sel in selectors[:50]])}
+{selectors_str}
 
 Content:
 {content_raw[:50000]}
@@ -1152,12 +1163,14 @@ Code Content:
             "size": len(content)
         }
         
+        queries_str = '\n'.join([f"\n--- Query {i+1} ---\n{query}" for i, query in enumerate(queries[:20])])
+        
         content_display = f"""[SQL File: {filename}]
 Total Queries: {len(queries)}
 File Size: {len(content):,} bytes
 
 Queries:
-{chr(10).join([f"\n--- Query {i+1} ---\n{query}" for i, query in enumerate(queries[:20])])}
+{queries_str}
 """
         
         return content_display, None, metadata
