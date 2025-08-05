@@ -751,10 +751,10 @@ class EnhancedFileProcessor:
             sample_rows = min(100, len(df))
             sample = df.head(sample_rows).to_string(max_rows=100, max_cols=20)
             
-                            dtypes_str = '\n'.join([f"  {col}: {dtype}" for col, dtype in list(summary['dtypes'].items())[:10]])
-                stats_str = '\n'.join([f"  {col}: mean={stats[col]['mean']:.2f}, std={stats[col]['std']:.2f}, min={stats[col]['min']:.2f}, max={stats[col]['max']:.2f}" for col in list(stats.keys())[:5]]) if stats else "  No numeric columns"
-                
-                content = f"""[Spreadsheet: {filename}]
+            dtypes_str = '\n'.join([f"  {col}: {dtype}" for col, dtype in list(summary['dtypes'].items())[:10]])
+            stats_str = '\n'.join([f"  {col}: mean={stats[col]['mean']:.2f}, std={stats[col]['std']:.2f}, min={stats[col]['min']:.2f}, max={stats[col]['max']:.2f}" for col in list(stats.keys())[:5]]) if stats else "  No numeric columns"
+            
+            content = f"""[Spreadsheet: {filename}]
 Rows: {summary['rows']:,}, Columns: {summary['columns']}
 Memory Usage: {summary['memory_usage']}
 Columns: {', '.join(summary['columns_list'][:20])}{'...' if len(summary['columns_list']) > 20 else ''}
@@ -3813,3 +3813,4 @@ if __name__ == '__main__':
     else:
         print(f"Starting Jack's AI Ultra Enhanced Edition on port {port} (Development Mode)")
         app.run(host='0.0.0.0', port=port, debug=True)
+
