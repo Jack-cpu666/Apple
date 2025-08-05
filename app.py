@@ -63,7 +63,6 @@ import speech_recognition as sr
 import textstat
 import nltk
 from transformers import pipeline
-import torch
 import pdfplumber
 import camelot
 import tabula
@@ -79,10 +78,6 @@ from icalendar import Calendar
 import vobject
 import eml_parser
 import extract_msg
-import pyzbar.pyzbar as pyzbar
-import qrcode
-import barcode
-from barcode.writer import ImageWriter
 import svgwrite
 import fitz
 import matplotlib.pyplot as plt
@@ -94,20 +89,11 @@ import folium
 import geopandas as gpd
 import rasterio
 import xarray as xr
-import h5py
-import netCDF4
-import astropy.io.fits as fits
 import Bio.SeqIO
 import rdkit
 from rdkit import Chem
 import pydicom
 import nibabel as nib
-import SimpleITK as sitk
-import trimesh
-import open3d as o3d
-import MDAnalysis
-import pytraj
-import nglview
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(64)
@@ -230,7 +216,6 @@ class FileType(Enum):
     ARCHIVE = "archive"
     AUDIO = "audio"
     VIDEO = "video"
-    MODEL = "model"
     DIAGRAM = "diagram"
     MARKUP = "markup"
     CONFIG = "config"
@@ -2115,12 +2100,11 @@ class UltraFileProcessor:
             FileType.ARCHIVE: ['zip', 'tar', 'gz', 'bz2', 'xz', 'rar', '7z', 'cab', 'iso', 'dmg', 'pkg', 'deb', 'rpm', 'apk', 'jar', 'war', 'ear'],
             FileType.AUDIO: ['mp3', 'wav', 'flac', 'aac', 'ogg', 'wma', 'm4a', 'opus', 'webm', 'amr', 'ac3', 'aiff', 'ape', 'dts', 'mka', 'mp2', 'mpa', 'ra', 'tta', 'voc', 'wv'],
             FileType.VIDEO: ['mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv', 'webm', 'ogv', 'm4v', 'mpg', 'mpeg', '3gp', 'f4v', 'swf', 'vob', 'ts', 'm2ts', 'mts', 'divx', 'xvid', 'rmvb', 'rm', 'asf'],
-            FileType.MODEL: ['h5', 'hdf5', 'pb', 'pth', 'pt', 'onnx', 'tflite', 'caffemodel', 'mlmodel', 'pmml', 'pkl', 'joblib', 'sav', 'model', 'weights'],
             FileType.DIAGRAM: ['drawio', 'vsdx', 'vsd', 'gliffy', 'graffle', 'dia', 'xmind', 'mm', 'mindnode', 'graphml', 'dot', 'gv', 'plantuml', 'puml'],
             FileType.MARKUP: ['html', 'htm', 'xhtml', 'css', 'scss', 'sass', 'less', 'styl'],
             FileType.CONFIG: ['dockerfile', 'vagrantfile', 'makefile', 'rakefile', 'gulpfile', 'gruntfile', 'webpack', 'babel', 'eslint', 'prettier', 'gitignore', 'gitattributes', 'editorconfig', 'htaccess', 'nginx', 'apache'],
             FileType.LOG: ['log', 'out', 'err', 'trace', 'debug', 'info', 'warn', 'error', 'fatal'],
-            FileType.BINARY: ['exe', 'dll', 'so', 'dylib', 'a', 'lib', 'o', 'obj', 'bin', 'dat', 'pak'],
+            FileType.BINARY: ['exe', 'dll', 'so', 'dylib', 'a', 'lib', 'o', 'obj', 'bin', 'dat', 'pak', 'h5', 'hdf5', 'pb', 'pth', 'pt', 'onnx', 'tflite', 'caffemodel', 'mlmodel', 'pmml', 'pkl', 'joblib', 'sav', 'model', 'weights'],
             FileType.SCIENTIFIC: ['fits', 'fts', 'nc', 'nc4', 'netcdf', 'hdf', 'h4', 'h5', 'mat', 'sav', 'npz', 'npy', 'feather', 'parquet', 'arrow'],
             FileType.MEDICAL: ['dcm', 'dicom', 'nii', 'nii.gz', 'mha', 'mhd', 'nrrd', 'nhdr', 'img', 'hdr'],
             FileType.GEOSPATIAL: ['shp', 'kml', 'kmz', 'gpx', 'geojson', 'topojson', 'osm', 'pbf', 'tif', 'tiff', 'img', 'sid', 'ecw'],
@@ -2139,7 +2123,6 @@ class UltraFileProcessor:
             FileType.ARCHIVE: self._process_archive,
             FileType.AUDIO: self._process_audio,
             FileType.VIDEO: self._process_video,
-            FileType.MODEL: self._process_model,
             FileType.DIAGRAM: self._process_diagram,
             FileType.MARKUP: self._process_markup,
             FileType.CONFIG: self._process_config,
@@ -3152,86 +3135,6 @@ class UltraFileProcessor:
         
         return attachment
     
-    async def _process_model(self, attachment: Attachment) -> Attachment:
-        try:
-            ext = attachment.filename.lower().split('.')[-1]
-            
-            if ext in ['h5', 'hdf5']:
-                import h5py
-                
-                with h5py.File(attachment.path, 'r') as f:
-                    structure = self._explore_h5_structure(f)
-                    
-                    attachment.metadata.update({
-                        "format": "HDF5",
-                        "structure": structure,
-                        "total_datasets": self._count_h5_datasets(f),
-                        "total_groups": self._count_h5_groups(f)
-                    })
-                    
-                    content = f"[Model File: {attachment.filename}]\n"
-                    content += f"Format: HDF5\n"
-                    content += f"Total Datasets: {attachment.metadata['total_datasets']}\n"
-                    content += f"Total Groups: {attachment.metadata['total_groups']}\n\n"
-                    content += f"Structure:\n{self._format_h5_structure(structure)}"
-            
-            elif ext in ['pth', 'pt']:
-                import torch
-                
-                model_data = torch.load(attachment.path, map_location='cpu')
-                
-                if isinstance(model_data, dict):
-                    keys = list(model_data.keys())
-                    total_params = 0
-                    
-                    for key, value in model_data.items():
-                        if isinstance(value, torch.Tensor):
-                            total_params += value.numel()
-                    
-                    attachment.metadata.update({
-                        "format": "PyTorch",
-                        "keys": keys[:100],
-                        "total_parameters": total_params
-                    })
-                    
-                    content = f"[Model File: {attachment.filename}]\n"
-                    content += f"Format: PyTorch\n"
-                    content += f"Total Parameters: {total_params:,}\n"
-                    content += f"Keys ({len(keys)}):\n"
-                    content += "\n".join(f"  - {key}" for key in keys[:50])
-                
-            elif ext == 'onnx':
-                import onnx
-                
-                model = onnx.load(attachment.path)
-                
-                attachment.metadata.update({
-                    "format": "ONNX",
-                    "producer": model.producer_name,
-                    "version": model.producer_version,
-                    "inputs": [inp.name for inp in model.graph.input],
-                    "outputs": [out.name for out in model.graph.output]
-                })
-                
-                content = f"[Model File: {attachment.filename}]\n"
-                content += f"Format: ONNX\n"
-                content += f"Producer: {model.producer_name} {model.producer_version}\n"
-                content += f"Inputs: {', '.join(attachment.metadata['inputs'])}\n"
-                content += f"Outputs: {', '.join(attachment.metadata['outputs'])}\n"
-            
-            else:
-                content = f"[Model File: {attachment.filename}]\n"
-                content += f"Format: {ext.upper()}\n"
-                content += f"Size: {attachment.size / 1024 / 1024:.2f} MB\n"
-            
-            attachment.extracted_text = content[:500000]
-            attachment.processed = True
-            
-        except Exception as e:
-            attachment.error = f"Model processing error: {str(e)}"
-            attachment.extracted_text = f"[Failed to process model: {attachment.filename}]"
-        
-        return attachment
     
     async def _process_diagram(self, attachment: Attachment) -> Attachment:
         try:
@@ -4276,64 +4179,6 @@ class UltraFileProcessor:
         
         return metrics
     
-    def _explore_h5_structure(self, group, max_depth: int = 5, current_depth: int = 0) -> Dict:
-        if current_depth >= max_depth:
-            return {"type": "truncated", "children": {}}
-        
-        structure = {
-            "type": "group",
-            "attrs": dict(group.attrs),
-            "children": {}
-        }
-        
-        for key in list(group.keys())[:100]:
-            item = group[key]
-            if isinstance(item, h5py.Group):
-                structure["children"][key] = self._explore_h5_structure(
-                    item, max_depth, current_depth + 1
-                )
-            elif isinstance(item, h5py.Dataset):
-                structure["children"][key] = {
-                    "type": "dataset",
-                    "shape": item.shape,
-                    "dtype": str(item.dtype),
-                    "attrs": dict(item.attrs)
-                }
-        
-        return structure
-    
-    def _format_h5_structure(self, structure: Dict, indent: int = 0) -> str:
-        lines = []
-        indent_str = "  " * indent
-        
-        if structure["type"] == "group":
-            if structure.get("attrs"):
-                lines.append(f"{indent_str}Attributes: {structure['attrs']}")
-            
-            for name, child in structure.get("children", {}).items():
-                if child["type"] == "group":
-                    lines.append(f"{indent_str}{name}/")
-                    lines.append(self._format_h5_structure(child, indent + 1))
-                else:
-                    lines.append(f"{indent_str}{name}: {child['shape']} {child['dtype']}")
-        
-        return "\n".join(lines)
-    
-    def _count_h5_datasets(self, group) -> int:
-        count = 0
-        for item in group.values():
-            if isinstance(item, h5py.Dataset):
-                count += 1
-            elif isinstance(item, h5py.Group):
-                count += self._count_h5_datasets(item)
-        return count
-    
-    def _count_h5_groups(self, group) -> int:
-        count = 1
-        for item in group.values():
-            if isinstance(item, h5py.Group):
-                count += self._count_h5_groups(item)
-        return count
     
     def _get_dominant_colors(self, img_array: np.ndarray, n_colors: int = 5) -> List[Dict]:
         if len(img_array.shape) == 3:
