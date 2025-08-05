@@ -75,7 +75,6 @@ import py7zr
 import tarfile
 import pptx
 import xlrd
-import odfpy
 from icalendar import Calendar
 import vobject
 import eml_parser
