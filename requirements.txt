@@ -67,3 +67,4 @@ SimpleITK
 trimesh
 open3d
 MDAnalysis
+odfpy
