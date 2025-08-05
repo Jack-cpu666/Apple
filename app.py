@@ -78,10 +78,6 @@ from icalendar import Calendar
 import vobject
 import eml_parser
 import extract_msg
-import pyzbar.pyzbar as pyzbar
-import qrcode
-import barcode
-from barcode.writer import ImageWriter
 import svgwrite
 import fitz
 import matplotlib.pyplot as plt

@@ -40,9 +40,6 @@ icalendar
 vobject
 eml-parser
 extract-msg
-pyzbar
-qrcode[pil]
-python-barcode[images]
 svgwrite
 
 # -- Machine Learning & NLP (CPU VERSION) --
