@@ -13,6 +13,7 @@ httpx
 pandas
 numpy
 scikit-learn
+pytesseract
 
 # -- File Processing & Parsing --
 Pillow
