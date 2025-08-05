@@ -7,64 +7,63 @@ PyPDF2
 python-docx
 openpyxl
 werkzeug
-pandas          # Advanced spreadsheet processing
-numpy           # Data analysis
-beautifulsoup4  # HTML parsing
-markdown        # Markdown rendering
-pygments        # Code syntax highlighting
-flask-cors      # CORS support
-flask-limiter   # Rate limiting
-flask-caching   # Response caching
+pandas
+numpy
+beautifulsoup4
+markdown
+pygments
+flask-cors
+flask-limiter
+flask-caching
 redis
 PyJWT
-python-magic-bin; sys_platform == "win32"  # File type detection (Windows)
-python-magic; sys_platform != "win32"      # File type detection (Unix/Linux/MacOS)
-chardet         # Character encoding detection
-aiofiles        # Async file operations
-pytesseract     # OCR
-opencv-python   # Computer vision
-librosa         # Audio processing
-soundfile       # Audio file I/O
-SpeechRecognition  # Speech recognition
-textstat        # Text statistics
-nltk            # Natural language processing
-transformers    # Hugging Face transformers
-torch           # PyTorch for ML
-pdfplumber      # PDF text extraction
-camelot-py[cv]  # PDF table extraction
-tabula-py       # PDF table extraction
-ebooklib        # E-book processing
-rarfile         # RAR archive support
-py7zr           # 7zip archive support
-python-pptx     # PowerPoint processing
-xlrd            # Excel file reading
-odfpy           # OpenDocument format
-icalendar       # Calendar file processing
-vobject         # vCard processing
-eml-parser      # Email parsing
-extract-msg     # Outlook message extraction
-pyzbar          # Barcode/QR code reading
-qrcode[pil]     # QR code generation
-python-barcode[images]  # Barcode generation
-svgwrite        # SVG generation
-PyMuPDF         # PDF processing
-matplotlib      # Plotting
-seaborn         # Statistical plotting
-plotly          # Interactive plotting
-networkx        # Graph analysis
-wordcloud       # Word cloud generation
-folium          # Map visualization
-geopandas       # Geospatial data
-rasterio        # Raster data
-xarray          # N-dimensional arrays
-h5py            # HDF5 files
-netCDF4         # NetCDF files
-astropy         # Astronomy data
-biopython       # Bioinformatics
-rdkit           # Chemistry
-pydicom         # Medical imaging
-nibabel         # Neuroimaging
-SimpleITK       # Medical image processing
-trimesh         # 3D mesh processing
-open3d          # 3D data processing
-MDAnalysis      # Molecular dynamics
+python-magic
+chardet
+aiofiles
+pytesseract
+opencv-python-headless
+librosa
+soundfile
+SpeechRecognition
+textstat
+nltk
+transformers
+torch
+pdfplumber
+camelot-py[cv]
+tabula-py
+ebooklib
+rarfile
+py7zr
+python-pptx
+xlrd
+odfpy
+icalendar
+vobject
+eml-parser
+extract-msg
+pyzbar
+qrcode[pil]
+python-barcode[images]
+svgwrite
+PyMuPDF
+matplotlib
+seaborn
+plotly
+networkx
+wordcloud
+folium
+geopandas
+rasterio
+xarray
+h5py
+netCDF4
+astropy
+biopython
+rdkit
+pydicom
+nibabel
+SimpleITK
+trimesh
+open3d
+MDAnalysis
