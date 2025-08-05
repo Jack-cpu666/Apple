@@ -751,10 +751,10 @@ class EnhancedFileProcessor:
             sample_rows = min(100, len(df))
             sample = df.head(sample_rows).to_string(max_rows=100, max_cols=20)
             
-                            dtypes_str = '\n'.join([f"  {col}: {dtype}" for col, dtype in list(summary['dtypes'].items())[:10]])
-                stats_str = '\n'.join([f"  {col}: mean={stats[col]['mean']:.2f}, std={stats[col]['std']:.2f}, min={stats[col]['min']:.2f}, max={stats[col]['max']:.2f}" for col in list(stats.keys())[:5]]) if stats else "  No numeric columns"
-                
-                content = f"""[Spreadsheet: {filename}]
+            dtypes_str = '\n'.join([f"  {col}: {dtype}" for col, dtype in list(summary['dtypes'].items())[:10]])
+            stats_str = '\n'.join([f"  {col}: mean={stats[col]['mean']:.2f}, std={stats[col]['std']:.2f}, min={stats[col]['min']:.2f}, max={stats[col]['max']:.2f}" for col in list(stats.keys())[:5]]) if stats else "  No numeric columns"
+            
+            content = f"""[Spreadsheet: {filename}]
 Rows: {summary['rows']:,}, Columns: {summary['columns']}
 Memory Usage: {summary['memory_usage']}
 Columns: {', '.join(summary['columns_list'][:20])}{'...' if len(summary['columns_list']) > 20 else ''}
@@ -829,11 +829,11 @@ Sample Data ({sample_rows} rows):
         
         numbered_code = '\n'.join([f"{i+1:5d} | {line}" for i, line in enumerate(lines[:1000])])
         
-                        imports_str = '\n'.join([f"  - {imp}" for imp in imports[:10]]) if imports else ""
-                functions_str = '\n'.join([f"  - {func}()" for func in functions[:10]]) if functions else ""
-                classes_str = '\n'.join([f"  - {cls}" for cls in classes[:10]]) if classes else ""
-                
-                content = f"""[Code File: {filename}]
+        imports_str = '\n'.join([f"  - {imp}" for imp in imports[:10]]) if imports else ""
+        functions_str = '\n'.join([f"  - {func}()" for func in functions[:10]]) if functions else ""
+        classes_str = '\n'.join([f"  - {cls}" for cls in classes[:10]]) if classes else ""
+        
+        content = f"""[Code File: {filename}]
 Language: {language}
 Lines: {line_count:,}
 File Size: {len(code):,} bytes
@@ -1284,6 +1284,11 @@ HTML_TEMPLATE = """
             margin: 0;
             padding: 0;
             box-sizing: border-box;
+        }
+        
+        /* Ensure interactive elements are always clickable */
+        button, input, select, textarea, a, [role="button"], .clickable {
+            pointer-events: auto !important;
         }
         
         body {
@@ -2316,11 +2321,13 @@ HTML_TEMPLATE = """
             justify-content: center;
             z-index: 1000;
             padding: 20px;
+            pointer-events: none;
         }
         
         .modal-overlay.active {
             display: flex;
             animation: fadeIn 0.3s;
+            pointer-events: auto;
         }
         
         .modal-content {
@@ -2420,10 +2427,12 @@ HTML_TEMPLATE = """
             align-items: center;
             justify-content: center;
             z-index: 9999;
+            pointer-events: none;
         }
         
         .loading-overlay.active {
             display: flex;
+            pointer-events: auto;
         }
         
         .loading-spinner {
@@ -2683,9 +2692,13 @@ HTML_TEMPLATE = """
         };
         
         document.addEventListener('DOMContentLoaded', function() {
+            hideLoadingOverlay();
             initializeApp();
             setupEventListeners();
             loadSettings();
+            
+            // Safety mechanism to hide loading overlay after 3 seconds if still visible
+            setTimeout(hideLoadingOverlay, 3000);
         });
         
         function initializeApp() {
@@ -3013,6 +3026,22 @@ Select a mode above or toggle Advanced Mode for enhanced responses. How can I as
         
         function hideTypingIndicator() {
             document.getElementById('typingIndicator').classList.remove('active');
+        }
+        
+        function hideLoadingOverlay() {
+            const overlay = document.getElementById('loadingOverlay');
+            if (overlay) {
+                overlay.classList.remove('active');
+                overlay.style.display = 'none';
+            }
+        }
+        
+        function showLoadingOverlay() {
+            const overlay = document.getElementById('loadingOverlay');
+            if (overlay) {
+                overlay.classList.add('active');
+                overlay.style.display = 'flex';
+            }
         }
         
         function updateTokenDisplay() {
