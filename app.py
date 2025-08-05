@@ -751,10 +751,10 @@ class EnhancedFileProcessor:
             sample_rows = min(100, len(df))
             sample = df.head(sample_rows).to_string(max_rows=100, max_cols=20)
             
-                            dtypes_str = '\n'.join([f"  {col}: {dtype}" for col, dtype in list(summary['dtypes'].items())[:10]])
-                stats_str = '\n'.join([f"  {col}: mean={stats[col]['mean']:.2f}, std={stats[col]['std']:.2f}, min={stats[col]['min']:.2f}, max={stats[col]['max']:.2f}" for col in list(stats.keys())[:5]]) if stats else "  No numeric columns"
-                
-                content = f"""[Spreadsheet: {filename}]
+            dtypes_str = '\n'.join([f"  {col}: {dtype}" for col, dtype in list(summary['dtypes'].items())[:10]])
+            stats_str = '\n'.join([f"  {col}: mean={stats[col]['mean']:.2f}, std={stats[col]['std']:.2f}, min={stats[col]['min']:.2f}, max={stats[col]['max']:.2f}" for col in list(stats.keys())[:5]]) if stats else "  No numeric columns"
+            
+            content = f"""[Spreadsheet: {filename}]
 Rows: {summary['rows']:,}, Columns: {summary['columns']}
 Memory Usage: {summary['memory_usage']}
 Columns: {', '.join(summary['columns_list'][:20])}{'...' if len(summary['columns_list']) > 20 else ''}
@@ -829,11 +829,11 @@ Sample Data ({sample_rows} rows):
         
         numbered_code = '\n'.join([f"{i+1:5d} | {line}" for i, line in enumerate(lines[:1000])])
         
-                        imports_str = '\n'.join([f"  - {imp}" for imp in imports[:10]]) if imports else ""
-                functions_str = '\n'.join([f"  - {func}()" for func in functions[:10]]) if functions else ""
-                classes_str = '\n'.join([f"  - {cls}" for cls in classes[:10]]) if classes else ""
-                
-                content = f"""[Code File: {filename}]
+        imports_str = '\n'.join([f"  - {imp}" for imp in imports[:10]]) if imports else ""
+        functions_str = '\n'.join([f"  - {func}()" for func in functions[:10]]) if functions else ""
+        classes_str = '\n'.join([f"  - {cls}" for cls in classes[:10]]) if classes else ""
+        
+        content = f"""[Code File: {filename}]
 Language: {language}
 Lines: {line_count:,}
 File Size: {len(code):,} bytes
