@@ -13,7 +13,7 @@ httpx
 pandas
 numpy
 
-# --- File Processing & Parsing ---
+gunicorn
 Pillow
 PyPDF2
 python-docx
@@ -69,3 +69,4 @@ nltk
 # --- Utilities ---
 PyJWT  # for import jwt
 redis # Your code imports this but doesn't appear to use it. Remove if unused.
+
