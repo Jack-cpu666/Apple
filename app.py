@@ -57,13 +57,8 @@ from pygments.lexers import get_lexer_by_name, guess_lexer
 from pygments.formatters import HtmlFormatter
 import pytesseract
 import cv2
-try:
-    import librosa
-    import soundfile as sf
-    AUDIO_PROCESSING_AVAILABLE = True
-except ImportError:
-    AUDIO_PROCESSING_AVAILABLE = False
-    print("Warning: librosa not available. Audio processing features will be limited.")
+import librosa
+import soundfile as sf
 import speech_recognition as sr
 import textstat
 import nltk
@@ -95,13 +90,8 @@ import geopandas as gpd
 import rasterio
 import xarray as xr
 import Bio.SeqIO
-try:
-    import rdkit
-    from rdkit import Chem
-    RDKIT_AVAILABLE = True
-except ImportError:
-    RDKIT_AVAILABLE = False
-    print("Warning: rdkit not available. Chemistry processing features will be limited.")
+import rdkit
+from rdkit import Chem
 import pydicom
 import nibabel as nib
 
@@ -3042,11 +3032,6 @@ class UltraFileProcessor:
     
     async def _process_audio(self, attachment: Attachment) -> Attachment:
         try:
-            if not AUDIO_PROCESSING_AVAILABLE:
-                attachment.error = "Audio processing libraries not available"
-                attachment.extracted_text = f"[Audio file: {attachment.filename}] - Processing not available"
-                return attachment
-                
             audio_data, sample_rate = librosa.load(attachment.path, sr=None)
             duration = len(audio_data) / sample_rate
             
@@ -3823,28 +3808,23 @@ class UltraFileProcessor:
                 content += f"Residues: {len(residues)}\n"
             
             elif ext in ['mol', 'mol2', 'sdf']:
-                if RDKIT_AVAILABLE:
-                    mol = Chem.MolFromMolFile(attachment.path) if ext == 'mol' else Chem.MolFromMol2File(attachment.path)
+                mol = Chem.MolFromMolFile(attachment.path) if ext == 'mol' else Chem.MolFromMol2File(attachment.path)
+                
+                if mol:
+                    attachment.metadata.update({
+                        "format": ext.upper(),
+                        "atoms": mol.GetNumAtoms(),
+                        "bonds": mol.GetNumBonds(),
+                        "molecular_weight": Chem.Descriptors.MolWt(mol),
+                        "formula": Chem.rdMolDescriptors.CalcMolFormula(mol)
+                    })
                     
-                    if mol:
-                        attachment.metadata.update({
-                            "format": ext.upper(),
-                            "atoms": mol.GetNumAtoms(),
-                            "bonds": mol.GetNumBonds(),
-                            "molecular_weight": Chem.Descriptors.MolWt(mol),
-                            "formula": Chem.rdMolDescriptors.CalcMolFormula(mol)
-                        })
-                        
-                        content = f"[Molecule File: {attachment.filename}]\n"
-                        content += f"Format: {ext.upper()}\n"
-                        content += f"Atoms: {mol.GetNumAtoms()}\n"
-                        content += f"Bonds: {mol.GetNumBonds()}\n"
-                        content += f"Formula: {Chem.rdMolDescriptors.CalcMolFormula(mol)}\n"
-                        content += f"Molecular Weight: {Chem.Descriptors.MolWt(mol):.2f}\n"
-                else:
                     content = f"[Molecule File: {attachment.filename}]\n"
                     content += f"Format: {ext.upper()}\n"
-                    content += "Note: RDKit not available - molecular analysis features disabled\n"
+                    content += f"Atoms: {mol.GetNumAtoms()}\n"
+                    content += f"Bonds: {mol.GetNumBonds()}\n"
+                    content += f"Formula: {Chem.rdMolDescriptors.CalcMolFormula(mol)}\n"
+                    content += f"Molecular Weight: {Chem.Descriptors.MolWt(mol):.2f}\n"
             
             elif ext == 'fasta':
                 sequences = []
