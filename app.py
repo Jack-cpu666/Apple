@@ -465,7 +465,7 @@ def api_veo3_download():
 # Frontend
 # ----------------------------
 
-INDEX_HTML = r"""
+INDEX_HTML_TEMPLATE = r"""
 <!doctype html>
 <html lang="en">
 <head>
@@ -692,7 +692,7 @@ const PROVIDERS = {
   }
 };
 
-const MODEL_LIMITS = %s;
+const MODEL_LIMITS = __MODEL_LIMITS_JSON__;
 
 let current = {
   provider: "gemini",
@@ -1093,11 +1093,18 @@ function fileToDataURL(file){
 </script>
 </body>
 </html>
-""" % (json.dumps(MODEL_LIMITS))
+"""
+# Build the final HTML safely (no % formatting with CSS % chars)
+# Make sure earlier in the file you used:
+#   INDEX_HTML_TEMPLATE = r""" ... const MODEL_LIMITS = __MODEL_LIMITS_JSON__; ... """
+INDEX_HTML = INDEX_HTML_TEMPLATE.replace(
+    "__MODEL_LIMITS_JSON__",
+    json.dumps(MODEL_LIMITS)
+)
 
 @app.get("/")
 def index():
-    return make_response(INDEX_HTML, 200, {"Content-Type":"text/html; charset=utf-8"})
+    return make_response(INDEX_HTML, 200, {"Content-Type": "text/html; charset=utf-8"})
 
 # ---------------
 # Run
