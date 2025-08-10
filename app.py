@@ -22,7 +22,11 @@ from urllib.error import HTTPError, URLError
 from flask import Flask, request, send_from_directory, make_response, jsonify, Response
 
 APP_TITLE = "All-in-One AI Chat (OpenAI • Claude • Gemini)"
-UPLOAD_DIR = "/mnt/data/uploads"
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR")  # set this to your disk mount path if you add a Persistent Disk
+if not UPLOAD_DIR:
+    # /tmp is always writable on Render (ephemeral: cleared on restarts)
+    UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "uploads")
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = Flask(__name__, static_folder=None)
