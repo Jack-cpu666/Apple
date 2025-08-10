@@ -1,22 +1,20 @@
 # app.py
-# A single-file Flask app with inline HTML/JS/CSS.
-# Drop on Render. Set a Start Command like: python app.py
-# Required env vars (set in Render > Environment):
-#   PRO_PASSWORD              (e.g., AEaeAEae123@)
-#   OPENAI_API_KEY_SERVER     (server OpenAI key, optional; gated by PRO_PASSWORD)
-#   ANTHROPIC_API_KEY_SERVER  (server Anthropic key, optional; gated by PRO_PASSWORD)
-#   GEMINI_KEY_1              (first Gemini key, optional; no password gate)
-#   GEMINI_KEY_2              (second Gemini key, optional; fallback if KEY_1 hits limits)
-#   GOOGLE_SEARCH_KEY         (optional, for Programmable Search)
-#   GOOGLE_SEARCH_CX          (optional, for Programmable Search)
+# Single-file Flask app with inline HTML/JS/CSS.
+# Start Command (Render):
+#   gunicorn app:app
+# or
+#   python app.py
 #
-# Notes:
-# - Vision: images are correctly sent to OpenAI (Responses API w/ input_image, fallback to chat.completions),
-#           Anthropic (messages API with base64 images), and Gemini (inlineData).
-# - Search: if GOOGLE_SEARCH_* not present, the Search toggle auto-disables.
-# - No analytics, no secret logging. CORS is open by default; restrict if you want.
+# Environment Variables (Render → Environment):
+#   PRO_PASSWORD
+#   OPENAI_API_KEY_SERVER
+#   ANTHROPIC_API_KEY_SERVER
+#   GEMINI_KEY_1
+#   GEMINI_KEY_2
+#   GOOGLE_SEARCH_KEY (optional, enables Search tool)
+#   GOOGLE_SEARCH_CX  (optional, enables Search tool)
 
-import os, io, base64, json, mimetypes, time, re, threading
+import os, io, base64, json, mimetypes, time, re
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
@@ -25,12 +23,11 @@ from flask import Flask, request, send_from_directory, make_response, jsonify, R
 
 APP_TITLE = "All-in-One AI Chat (OpenAI • Claude • Gemini)"
 UPLOAD_DIR = "/mnt/data/uploads"
-
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = Flask(__name__, static_folder=None)
 
-# --------- Helpers
+# ---------------- CORS & utils
 
 def cors(resp):
     resp.headers["Access-Control-Allow-Origin"] = "*"
@@ -57,14 +54,12 @@ GEMINI_KEYS = [k for k in [read_env("GEMINI_KEY_1"), read_env("GEMINI_KEY_2")] i
 GOOGLE_SEARCH_KEY = read_env("GOOGLE_SEARCH_KEY")
 GOOGLE_SEARCH_CX  = read_env("GOOGLE_SEARCH_CX")
 
-# ---- tiny http helper
-
 def http_json(method, url, headers=None, data=None, timeout=60):
     body = json.dumps(data).encode("utf-8") if data is not None else None
     req = Request(url, data=body, method=method.upper())
     req.add_header("Content-Type", "application/json")
     if headers:
-        for k,v in headers.items():
+        for k, v in headers.items():
             req.add_header(k, v)
     try:
         with urlopen(req, timeout=timeout) as r:
@@ -79,7 +74,6 @@ def http_json(method, url, headers=None, data=None, timeout=60):
         return None, {"status": 0, "error": str(e)}
 
 def fetch_bytes(url, max_mb=20):
-    # Fetch a remote file (for image URLs added in messages)
     with urlopen(url) as r:
         b = r.read()
         if len(b) > max_mb * 1024 * 1024:
@@ -88,7 +82,6 @@ def fetch_bytes(url, max_mb=20):
 
 def guess_mime(name_or_bytes):
     if isinstance(name_or_bytes, bytes):
-        # naive sniff
         b = name_or_bytes[:16]
         if b.startswith(b"\x89PNG"): return "image/png"
         if b.startswith(b"\xff\xd8"): return "image/jpeg"
@@ -97,7 +90,8 @@ def guess_mime(name_or_bytes):
     mt, _ = mimetypes.guess_type(str(name_or_bytes))
     return mt or "application/octet-stream"
 
-# --------- Google Search (Programmable Search)
+# ---------------- Google Search (Programmable Search)
+
 def google_search_top(q, n=3):
     if not (GOOGLE_SEARCH_KEY and GOOGLE_SEARCH_CX):
         return []
@@ -126,7 +120,7 @@ def build_search_context(results):
         lines.append(f"{i}. {r['title']}\n{r['snippet']}\n{r['link']}\n")
     return "\n".join(lines)
 
-# --------- Provider calls
+# ---------------- Key picking
 
 def pick_openai_key(user_key, pro_password):
     if user_key: return user_key
@@ -151,11 +145,6 @@ def pick_gemini_key(user_key):
     return None
 
 def normalize_messages_for_last_user_images(messages, attachments):
-    """
-    We accept a flat list of chat messages [{role, content}], and we attach any
-    newly uploaded images to the *last* user turn.
-    attachments: list of {"url": "...", "mime": "..."} (images preferred)
-    """
     msgs = list(messages)
     if attachments:
         for i in range(len(msgs)-1, -1, -1):
@@ -165,11 +154,9 @@ def normalize_messages_for_last_user_images(messages, attachments):
                 break
     return msgs
 
-# ----- OpenAI (Responses API first, fallback to Chat Completions)
+# ---------------- OpenAI (Responses API → fallback chat.completions)
+
 def openai_chat(model, system_prompt, messages, key):
-    # Build "input" for Responses: array of turns with typed parts
-    # See: platform.openai.com/docs/api-reference/responses + gpt-4.1/o3 docs
-    # Try Responses first (supports input_image). If it fails, fallback to chat.completions.
     api = "https://api.openai.com/v1/responses"
     headers = {"Authorization": f"Bearer {key}"}
 
@@ -190,23 +177,19 @@ def openai_chat(model, system_prompt, messages, key):
         input_list.append({"role": "system", "content":[{"type":"text","text": system_prompt}]})
     for m in messages:
         role = m.get("role","user")
-        # Responses wants "user" and "assistant" roles
-        content = to_parts(m) if role == "user" else ([{"type":"output_text","text": m.get("content","")}] if role=="assistant" else [{"type":"input_text","text": m.get("content","")}])
-        # We map assistant to output_text to preserve history; many examples omit assistant history; this is safe.
-        input_list.append({"role": ("user" if role!="assistant" else "assistant"), "content": content})
+        if role == "user":
+            content = to_parts(m)
+            input_list.append({"role":"user","content":content})
+        elif role == "assistant":
+            input_list.append({"role":"assistant","content":[{"type":"output_text","text": m.get("content","")}]})
+        else:
+            input_list.append({"role":"user","content":[{"type":"input_text","text": m.get("content","")}]})
 
-    payload = {
-        "model": model,
-        "input": input_list,
-        "max_output_tokens": 1024
-    }
-
+    payload = {"model": model, "input": input_list, "max_output_tokens": 1024}
     data, err = http_json("POST", api, headers, payload, timeout=120)
     if not err and data:
-        # Responses API can return output_text or a structured output array
         if "output_text" in data and data["output_text"]:
             return data["output_text"], {"provider":"openai","model":model}, None
-        # Try to reconstruct text
         try:
             blocks = data.get("output", []) or data.get("response", {}).get("output", [])
             texts = []
@@ -218,9 +201,8 @@ def openai_chat(model, system_prompt, messages, key):
                 return "\n".join(texts), {"provider":"openai","model":model}, None
         except Exception:
             pass
-        # If we reached here, fallthrough to chat.completions
 
-    # Fallback: chat.completions for broader compatibility
+    # fallback
     api2 = "https://api.openai.com/v1/chat/completions"
     msg_list = []
     if system_prompt and system_prompt.strip():
@@ -236,11 +218,7 @@ def openai_chat(model, system_prompt, messages, key):
             mime = att.get("mime") or guess_mime(url)
             if url and mime.startswith("image/"):
                 parts.append({"type":"image_url","image_url":{"url": url}})
-        # If no parts (e.g., assistant), pass plain text
-        msg_list.append({
-            "role": role,
-            "content": parts if parts else content_text
-        })
+        msg_list.append({"role": role, "content": parts if parts else content_text})
 
     payload2 = {"model": model, "messages": msg_list, "temperature": 0.2}
     data2, err2 = http_json("POST", api2, headers, payload2, timeout=120)
@@ -252,13 +230,11 @@ def openai_chat(model, system_prompt, messages, key):
         txt = json.dumps(data2)
     return txt, {"provider":"openai","model":model}, None
 
-# ----- Anthropic (Claude 4: Opus 4.1, Sonnet 4)
+# ---------------- Anthropic (Claude 4: Opus 4.1, Sonnet 4)
+
 def anthropic_chat(model, system_prompt, messages, key):
     api = "https://api.anthropic.com/v1/messages"
-    headers = {
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-    }
+    headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
 
     def to_content(turn):
         parts = []
@@ -284,28 +260,18 @@ def anthropic_chat(model, system_prompt, messages, key):
         return parts
 
     msgs = []
-    if system_prompt and system_prompt.strip():
-        sys = system_prompt
-    else:
-        sys = None
+    sys = system_prompt.strip() if system_prompt and system_prompt.strip() else None
     for m in messages:
         if m.get("role") == "assistant":
-            # Anthropic doesn't accept assistant turns in "messages" input; skip or map
             continue
         msgs.append({"role":"user", "content": to_content(m)})
 
-    payload = {
-        "model": model,  # e.g., "claude-opus-4-1-20250805" or "claude-sonnet-4-20250514"
-        "max_tokens": 1024,
-        "messages": msgs
-    }
-    if sys:
-        payload["system"] = sys
+    payload = {"model": model, "max_tokens": 1024, "messages": msgs}
+    if sys: payload["system"] = sys
 
     data, err = http_json("POST", api, headers, payload, timeout=120)
     if err: return None, None, err
     try:
-        # Join text blocks from content
         txts = []
         for c in data["content"]:
             if c.get("type") == "text":
@@ -314,10 +280,11 @@ def anthropic_chat(model, system_prompt, messages, key):
     except Exception:
         return json.dumps(data), {"provider":"anthropic","model":model}, None
 
-# ----- Gemini (1.5 Pro/Flash)
+# ---------------- Gemini (1.5 Pro/Flash)
+
 def gemini_chat(model, system_prompt, messages, key):
     base = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
-    # Build contents with inlineData images for the *last* user message that has attachments
+
     def to_parts(turn):
         parts = []
         txt = turn.get("content") or ""
@@ -341,10 +308,7 @@ def gemini_chat(model, system_prompt, messages, key):
         role = m.get("role","user")
         contents.append({"role": "user" if role!="assistant" else "model", "parts": to_parts(m)})
 
-    payload = {
-        "contents": contents,
-        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1024}
-    }
+    payload = {"contents": contents, "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1024}}
     data, err = http_json("POST", base, {}, payload, timeout=120)
     if err: return None, None, err
     try:
@@ -357,7 +321,8 @@ def gemini_chat(model, system_prompt, messages, key):
     except Exception:
         return json.dumps(data), {"provider":"gemini","model":model}, None
 
-# --------- API: upload files
+# ---------------- Uploads
+
 @app.route("/api/upload", methods=["POST", "OPTIONS"])
 def upload():
     if request.method == "OPTIONS":
@@ -379,7 +344,8 @@ def upload():
 def serve_upload(fname):
     return send_from_directory(UPLOAD_DIR, fname, as_attachment=False)
 
-# --------- API: chat
+# ---------------- Chat API
+
 @app.route("/api/chat", methods=["POST", "OPTIONS"])
 def api_chat():
     if request.method == "OPTIONS":
@@ -398,12 +364,9 @@ def api_chat():
     gemini_key_user = keys.get("gemini")
     pro_password = keys.get("pro_password")
 
-    # attach images to last user turn
     messages = normalize_messages_for_last_user_images(messages, attachments)
 
-    # optional search context (Google Programmable Search)
     if use_search and GOOGLE_SEARCH_KEY and GOOGLE_SEARCH_CX:
-        # take last user text chunk
         last_user_text = ""
         for m in reversed(messages):
             if m.get("role") == "user":
@@ -435,7 +398,7 @@ def api_chat():
             return jsonify({"error":"Unknown provider"}), 400
 
         if err:
-            # If Gemini KEY_1 rate-limited, auto-try KEY_2 once
+            # Gemini fallback to other server key if available
             if provider == "google" and not gemini_key_user and len(GEMINI_KEYS) > 1:
                 alt = GEMINI_KEYS[1] if GEMINI_KEYS[0] == key else GEMINI_KEYS[0]
                 out2, meta2, err2 = gemini_chat(model, system_prompt, messages, alt)
@@ -447,7 +410,6 @@ def api_chat():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# --------- API: search-only (optional)
 @app.route("/api/search", methods=["POST"])
 def api_search():
     data = request.get_json(force=True, silent=True) or {}
@@ -457,57 +419,48 @@ def api_search():
     res = google_search_top(q, n=5)
     return jsonify({"results": res})
 
-# --------- App UI (inline HTML)
-@app.route("/")
-def index():
-    html = f"""<!doctype html>
+# ---------------- Inline HTML (no f-string!)
+
+HTML_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
-<title>{APP_TITLE}</title>
+<title>{{APP_TITLE}}</title>
 <link rel="icon" href="data:,">
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
-  :root {{
+  :root {
     --panel:#0f172a; --ink:#e5e7eb; --ink-dim:#cbd5e1; --accent:#8b5cf6; --chip:#1f2937;
-  }}
-  body {{ background: #0b1020; color: var(--ink); }}
-  .glass {{ backdrop-filter: blur(10px); background: rgba(15, 23, 42, 0.65); }}
-  .card {{ border:1px solid rgba(255,255,255,0.08); }}
-  .scrollbar::-webkit-scrollbar {{ width:8px; height:8px; }}
-  .scrollbar::-webkit-scrollbar-thumb {{ background:#243047; border-radius:6px; }}
-  .bubble-user {{
+  }
+  body { background: #0b1020; color: var(--ink); }
+  .glass { backdrop-filter: blur(10px); background: rgba(15, 23, 42, 0.65); }
+  .card { border:1px solid rgba(255,255,255,0.08); }
+  .scrollbar::-webkit-scrollbar { width:8px; height:8px; }
+  .scrollbar::-webkit-scrollbar-thumb { background:#243047; border-radius:6px; }
+  .bubble-user {
     background: linear-gradient(180deg, rgba(139,92,246,.2), rgba(99,102,241,.2));
     border:1px solid rgba(139,92,246,.35);
-  }}
-  .bubble-assistant {{
+  }
+  .bubble-assistant {
     background: rgba(2,6,23,.6);
     border:1px solid rgba(255,255,255,.08);
-  }}
-  /* Composer never blocks text */
-  #composer-wrapper {{
-    position: sticky; bottom: 0; left: 0; right: 0;
-  }}
-  #chat {{
-    scroll-padding-bottom: 1rem;
-  }}
-  textarea {{
-    resize: none; line-height:1.5;
-  }}
-  .btn {{
+  }
+  #composer-wrapper { position: sticky; bottom: 0; left: 0; right: 0; }
+  #chat { scroll-padding-bottom: 1rem; }
+  textarea { resize: none; line-height:1.5; }
+  .btn {
     background: linear-gradient(180deg, rgba(139,92,246,.7), rgba(99,102,241,.7));
     border:1px solid rgba(139,92,246,.5);
-  }}
-  .btn:hover {{ filter: brightness(1.1); }}
-  .tag {{ background: var(--chip); border:1px solid rgba(255,255,255,.08); }}
-  .pill {{ border:1px solid rgba(255,255,255,.08); }}
-  .mono {{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }}
+  }
+  .btn:hover { filter: brightness(1.1); }
+  .tag { background: var(--chip); border:1px solid rgba(255,255,255,.08); }
+  .pill { border:1px solid rgba(255,255,255,.08); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
 </style>
 </head>
 <body class="min-h-screen">
   <div class="grid grid-cols-12 gap-4 max-w-7xl mx-auto p-4">
-    <!-- Sidebar -->
     <aside class="col-span-12 lg:col-span-3 space-y-4">
       <div class="glass card rounded-2xl p-4">
         <div class="flex items-center justify-between">
@@ -564,11 +517,9 @@ def index():
       </div>
     </aside>
 
-    <!-- Main -->
     <main class="col-span-12 lg:col-span-9">
       <div id="chat" class="glass card rounded-2xl p-4 h-[75vh] overflow-y-auto scrollbar"></div>
 
-      <!-- Composer -->
       <div id="composer-wrapper" class="glass card rounded-2xl mt-4 p-3">
         <div class="flex items-center gap-2 flex-wrap">
           <label class="px-3 py-1 rounded-xl pill cursor-pointer text-sm">Upload
@@ -588,22 +539,22 @@ def index():
 <script>
 const DEFAULT_SYSTEM = `You are a careful, helpful assistant. Follow the user's instructions exactly, ask for missing context only when essential, cite concrete dates when clarifying time, and keep answers concise unless deeply technical. When images are attached, describe what you see before analyzing. Prefer bullet lists and short paragraphs for readability.`;
 
-const PRESETS = {{
+const PRESETS = {
   openai: [
-    {{ id:"o3", label:"o3 (reasoning, premium)"}},           // OpenAI o3
-    {{ id:"o4-mini", label:"o4-mini (cheap reasoning)"}},     // Smaller reasoning
-    {{ id:"gpt-4.1", label:"GPT-4.1 (flagship)"}},            // GPT family
-    {{ id:"gpt-4.1-mini", label:"GPT-4.1 mini (cheap)"}}
+    { id:"o3", label:"o3 (reasoning, premium)"},
+    { id:"o4-mini", label:"o4-mini (cheap reasoning)"},
+    { id:"gpt-4.1", label:"GPT-4.1 (flagship)"},
+    { id:"gpt-4.1-mini", label:"GPT-4.1 mini (cheap)"}
   ],
   anthropic: [
-    {{ id:"claude-opus-4-1-20250805", label:"Claude Opus 4.1"}}, // API id per Anthropic docs
-    {{ id:"claude-sonnet-4-20250514", label:"Claude Sonnet 4"}}
+    { id:"claude-opus-4-1-20250805", label:"Claude Opus 4.1"},
+    { id:"claude-sonnet-4-20250514", label:"Claude Sonnet 4"}
   ],
   google: [
-    {{ id:"gemini-1.5-pro", label:"Gemini 1.5 Pro"}}, 
-    {{ id:"gemini-1.5-flash", label:"Gemini 1.5 Flash"}}
+    { id:"gemini-1.5-pro", label:"Gemini 1.5 Pro"},
+    { id:"gemini-1.5-flash", label:"Gemini 1.5 Flash"}
   ]
-}};
+};
 
 const $ = sel => document.querySelector(sel);
 const $$ = sel => Array.from(document.querySelectorAll(sel));
@@ -633,18 +584,18 @@ const importFileEl = $("#importFile");
 const statusEl = $("#status");
 
 let filesToSend = [];
-let state = {{
+let state = {
   chats: [],
   activeId: null,
-  keys: {{
+  keys: {
     openai: localStorage.getItem("openai_key") || "",
     anthropic: localStorage.getItem("anthropic_key") || "",
     gemini: localStorage.getItem("gemini_key") || "",
     pro_password: localStorage.getItem("pro_password") || ""
-  }},
+  },
   useSearch: JSON.parse(localStorage.getItem("use_search") || "false"),
   systemPrompt: localStorage.getItem("system_prompt") || DEFAULT_SYSTEM
-}};
+};
 
 function uid(){ return Math.random().toString(36).slice(2) + Date.now().toString(36); }
 
@@ -656,7 +607,7 @@ function saveState(){
 }
 
 function loadState(){
-  try {{ state.chats = JSON.parse(localStorage.getItem("chats_v2") || "[]"); }} catch {{ state.chats=[]; }}
+  try { state.chats = JSON.parse(localStorage.getItem("chats_v2") || "[]"); } catch { state.chats=[]; }
   state.activeId = localStorage.getItem("active_chat") || (state.chats[0]?.id || null);
   renderChatList();
   if (!state.activeId) newChat();
@@ -667,10 +618,7 @@ function newChat(){
   const id = uid();
   const provider = providerEl.value;
   const model = (customModelEl.value.trim() || modelEl.value);
-  const chat = {{
-    id, title: "New chat", provider, model,
-    messages: []
-  }};
+  const chat = { id, title: "New chat", provider, model, messages: [] };
   state.chats.unshift(chat);
   state.activeId = id;
   saveState();
@@ -680,31 +628,31 @@ function newChat(){
 
 function renderChatList(){
   chatListEl.innerHTML = "";
-  state.chats.forEach(ch => {{
+  state.chats.forEach(ch => {
     const btn = document.createElement("div");
     btn.className = "p-2 rounded-xl hover:bg-slate-800 cursor-pointer flex items-center justify-between";
-    btn.innerHTML = `<span class="truncate">${{ch.title}}</span>
+    btn.innerHTML = `<span class="truncate">${ch.title}</span>
       <div class="flex gap-2">
         <button class="text-xs tag px-2 py-1 rounded-lg rename">Rename</button>
         <button class="text-xs tag px-2 py-1 rounded-lg del">Del</button>
       </div>`;
-    btn.onclick = (e) => {{ if (e.target.closest(".rename")||e.target.closest(".del")) return; state.activeId = ch.id; saveState(); renderActive(); }};
-    btn.querySelector(".rename").onclick = (e) => {{
+    btn.onclick = (e) => { if (e.target.closest(".rename")||e.target.closest(".del")) return; state.activeId = ch.id; saveState(); renderActive(); };
+    btn.querySelector(".rename").onclick = (e) => {
       e.stopPropagation();
       const t = prompt("Rename chat", ch.title) || ch.title;
       ch.title = t;
       saveState(); renderChatList();
-    }};
-    btn.querySelector(".del").onclick = (e) => {{
+    };
+    btn.querySelector(".del").onclick = (e) => {
       e.stopPropagation();
       if (!confirm("Delete this chat?")) return;
       state.chats = state.chats.filter(c => c.id !== ch.id);
       if (state.activeId === ch.id) state.activeId = state.chats[0]?.id || null;
       saveState(); renderChatList(); renderActive();
-    }};
+    };
     if (ch.id === state.activeId) btn.classList.add("bg-slate-800");
     chatListEl.appendChild(btn);
-  }});
+  });
 }
 
 function renderActive(){
@@ -722,11 +670,11 @@ function renderActive(){
 function setModelOptions(){
   const p = providerEl.value;
   modelEl.innerHTML = "";
-  PRESETS[p].forEach(m => {{
+  PRESETS[p].forEach(m => {
     const opt = document.createElement("option");
     opt.value = m.id; opt.textContent = m.label;
     modelEl.appendChild(opt);
-  }});
+  });
 }
 
 function addBubble(role, text, atts=[]){
@@ -734,23 +682,23 @@ function addBubble(role, text, atts=[]){
   wrap.className = "mb-3";
   const b = document.createElement("div");
   b.className = "rounded-2xl p-3 " + (role==="user"?"bubble-user":"bubble-assistant");
-  b.innerHTML = text ? `<div class="whitespace-pre-wrap">${{sanitize(text)}}</div>` : "";
+  b.innerHTML = text ? `<div class="whitespace-pre-wrap">${sanitize(text)}</div>` : "";
   if (atts && atts.length){
     const grid = document.createElement("div");
     grid.className = "grid grid-cols-3 gap-2 mt-2";
-    atts.forEach(a => {{
+    atts.forEach(a => {
       if ((a.mime||"").startsWith("image/")){
         const img = document.createElement("img");
         img.src = a.url; img.alt = a.name || "image";
         img.className = "rounded-xl border";
         grid.appendChild(img);
-      }} else {{
+      } else {
         const link = document.createElement("a");
         link.href = a.url; link.textContent = a.name || a.url; link.target = "_blank";
         link.className = "text-indigo-300 underline text-sm";
         grid.appendChild(link);
-      }}
-    }});
+      }
+    });
     b.appendChild(grid);
   }
   wrap.appendChild(b);
@@ -758,19 +706,18 @@ function addBubble(role, text, atts=[]){
 }
 
 function sanitize(s){
-  return s.replace(/[&<>]/g, c => ({{"&":"&amp;","<":"&lt;",">":"&gt;"}}[c]));
+  return s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 }
 
 function scrollToBottom(){
-  chatEl.scrollTo({{ top: chatEl.scrollHeight, behavior: "smooth" }});
+  chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: "smooth" });
 }
 
 function growTextarea(){
   promptEl.style.height = "auto";
   const max = 240;
   promptEl.style.height = Math.min(promptEl.scrollHeight, max) + "px";
-  // ensure chat body has enough padding so bottom lines are visible
-  const compH = $("#composer-wrapper").offsetHeight;
+  const compH = document.querySelector("#composer-wrapper").offsetHeight;
   chatEl.style.paddingBottom = (compH + 8) + "px";
   promptEl.scrollTop = promptEl.scrollHeight;
 }
@@ -779,24 +726,28 @@ promptEl.addEventListener("input", growTextarea);
 window.addEventListener("resize", growTextarea);
 setTimeout(growTextarea, 0);
 
-promptEl.addEventListener("keydown", (e) => {{
-  if (e.key === "Enter" && !e.shiftKey) {{
+promptEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     sendBtn.click();
-  }}
-}});
+  }
+});
 
 toggleSearchEl.checked = state.useSearch;
-toggleSearchEl.addEventListener("change", () => {{
+toggleSearchEl.addEventListener("change", () => {
   state.useSearch = toggleSearchEl.checked;
   saveState();
-}});
+});
 
-systemPromptEl.value = state.systemPrompt;
-resetSystemEl.onclick = () => {{
-  systemPromptEl.value = DEFAULT_SYSTEM;
+const DEFAULT_SYSTEM = document.getElementById("systemPrompt") ? document.getElementById("systemPrompt").value : DEFAULT_SYSTEM;
+document.getElementById("systemPrompt").value = state.systemPrompt;
+
+const systemPromptElRef = document.getElementById("systemPrompt");
+systemPromptElRef.addEventListener("input", () => { state.systemPrompt = systemPromptElRef.value; saveState(); });
+document.getElementById("resetSystem").onclick = () => {
+  systemPromptElRef.value = DEFAULT_SYSTEM;
   state.systemPrompt = DEFAULT_SYSTEM; saveState();
-}};
+};
 
 providerEl.addEventListener("change", setModelOptions);
 setModelOptions();
@@ -809,7 +760,7 @@ function syncKeysUI(){
 }
 syncKeysUI();
 
-saveKeysEl.onclick = () => {{
+saveKeysEl.onclick = () => {
   state.keys.openai = openaiKeyEl.value.trim();
   state.keys.anthropic = anthropicKeyEl.value.trim();
   state.keys.gemini = geminiKeyEl.value.trim();
@@ -819,71 +770,71 @@ saveKeysEl.onclick = () => {{
   localStorage.setItem("gemini_key", state.keys.gemini);
   localStorage.setItem("pro_password", state.keys.pro_password);
   status("Keys saved");
-}};
-clearKeysEl.onclick = () => {{
+};
+clearKeysEl.onclick = () => {
   ["openai_key","anthropic_key","gemini_key","pro_password"].forEach(k => localStorage.removeItem(k));
-  state.keys = {{ openai:"",anthropic:"",gemini:"",pro_password:"" }};
+  state.keys = { openai:"",anthropic:"",gemini:"",pro_password:"" };
   syncKeysUI();
   status("Keys cleared");
-}};
+};
 
 newChatEl.onclick = newChat;
-clearChatsEl.onclick = () => {{
+clearChatsEl.onclick = () => {
   if (!confirm("Clear ALL chats?")) return;
   state.chats = []; state.activeId = null; saveState(); newChat();
-}};
-exportChatsEl.onclick = () => {{
-  const blob = new Blob([JSON.stringify(state.chats, null, 2)], {{type:"application/json"}});
+};
+exportChatsEl.onclick = () => {
+  const blob = new Blob([JSON.stringify(state.chats, null, 2)], {type:"application/json"});
   const u = URL.createObjectURL(blob);
   const a = document.createElement("a"); a.href = u; a.download="chats.json"; a.click();
   URL.revokeObjectURL(u);
-}};
-importFileEl.onchange = (e) => {{
+};
+importFileEl.onchange = (e) => {
   const f = e.target.files[0]; if(!f) return;
   const reader = new FileReader();
-  reader.onload = () => {{
-    try {{
+  reader.onload = () => {
+    try {
       const arr = JSON.parse(reader.result);
-      if (Array.isArray(arr)) {{
+      if (Array.isArray(arr)) {
         state.chats = arr.concat(state.chats);
         saveState(); renderChatList(); renderActive();
         status("Imported chats");
-      }} else status("Invalid file");
-    }} catch {{ status("Invalid JSON"); }}
-  }};
+      } else status("Invalid file");
+    } catch { status("Invalid JSON"); }
+  };
   reader.readAsText(f);
-}};
+};
 
-fileInput.onchange = async (e) => {{
+fileInput.onchange = async (e) => {
   if (!fileInput.files.length) return;
   const fd = new FormData();
   for (const f of fileInput.files) fd.append("files", f);
   setBusy(true, "Uploading...");
-  try {{
-    const res = await fetch("/api/upload", {{ method:"POST", body: fd }});
+  try {
+    const res = await fetch("/api/upload", { method:"POST", body: fd });
     const data = await res.json();
     (data.files||[]).forEach(addChip);
-  }} catch(e) {{
+  } catch(e) {
     console.error(e); alert("Upload failed");
-  }} finally {{
+  } finally {
     setBusy(false);
     fileInput.value = "";
-  }}
-}};
+  }
+};
 function addChip(f){
   filesToSend.push(f);
   const chip = document.createElement("div");
   chip.className = "tag rounded-xl px-2 py-1 flex items-center gap-2";
-  chip.innerHTML = `<span class="text-xs truncate max-w-[160px]">${{f.name || f.url}}</span>
+  chip.innerHTML = `<span class="text-xs truncate max-w-[160px]">${f.name || f.url}</span>
     <button class="text-xs">×</button>`;
-  chip.querySelector("button").onclick = () => {{
+  chip.querySelector("button").onclick = () => {
     filesToSend = filesToSend.filter(x => x.url !== f.url);
     chip.remove();
-  }};
+  };
   fileChips.appendChild(chip);
 }
 
-sendBtn.onclick = async () => {{
+sendBtn.onclick = async () => {
   const txt = promptEl.value.trim();
   const ch = state.chats.find(c => c.id === state.activeId);
   if (!ch) return;
@@ -891,65 +842,65 @@ sendBtn.onclick = async () => {{
   const provider = providerEl.value;
   const model = (customModelEl.value.trim() || modelEl.value);
 
-  // update chat meta
   ch.provider = provider; ch.model = model;
   state.systemPrompt = systemPromptEl.value;
   saveState();
 
-  // push user turn
   const atts = filesToSend.slice();
-  ch.messages.push({{role:"user", content: txt, attachments: atts}});
+  ch.messages.push({role:"user", content: txt, attachments: atts});
   filesToSend = []; fileChips.innerHTML = "";
   promptEl.value=""; growTextarea();
   addBubble("user", txt, atts); scrollToBottom();
 
   setBusy(true, "Thinking...");
-  try {{
-    const res = await fetch("/api/chat", {{
+  try {
+    const res = await fetch("/api/chat", {
       method:"POST",
-      headers:{{"Content-Type":"application/json"}},
-      body: JSON.stringify({{
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({
         provider,
         model,
         system_prompt: state.systemPrompt,
         messages: ch.messages,
-        attachments: [], // already attached to the last user turn
+        attachments: [],
         use_search: toggleSearchEl.checked,
-        keys: {{
+        keys: {
           openai: state.keys.openai || undefined,
           anthropic: state.keys.anthropic || undefined,
           gemini: state.keys.gemini || undefined,
           pro_password: state.keys.pro_password || undefined
-        }}
-      }})
-    }});
+        }
+      })
+    });
     const data = await res.json();
     if (!res.ok) throw new Error((data && (data.error?.error || data.error)) || "Request failed");
     const out = (data.output || "").trim();
-    ch.messages.push({{role:"assistant", content: out}});
+    ch.messages.push({role:"assistant", content: out});
     saveState();
     addBubble("assistant", out); scrollToBottom();
-  }} catch(err) {{
+  } catch(err) {
     console.error(err);
     addBubble("assistant", "⚠️ " + (err.message || "Error"));
-  }} finally {{
+  } finally {
     setBusy(false);
-  }}
-}};
+  }
+};
 
 function status(msg){ statusEl.textContent = msg; setTimeout(() => statusEl.textContent="Ready", 2000); }
 function setBusy(isBusy, msg){ sendBtn.disabled = !!isBusy; statusEl.textContent = isBusy ? (msg||"…"): "Ready"; }
 
 loadState();
-systemPromptEl.addEventListener("input", () => {{ state.systemPrompt = systemPromptEl.value; saveState(); }});
-document.addEventListener("DOMContentLoaded", () => {{
-  // initial model list
-  setModelOptions();
-}});
-
+document.getElementById("systemPrompt").value = state.systemPrompt;
+document.getElementById("systemPrompt").addEventListener("input", () => { state.systemPrompt = document.getElementById("systemPrompt").value; saveState(); });
+document.addEventListener("DOMContentLoaded", () => { setModelOptions(); });
+setTimeout(growTextarea, 0);
 </script>
 </body>
 </html>"""
+
+@app.route("/")
+def index():
+    html = HTML_TEMPLATE.replace("{{APP_TITLE}}", APP_TITLE)
     return Response(html, mimetype="text/html")
 
 if __name__ == "__main__":
