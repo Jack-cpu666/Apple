@@ -963,6 +963,20 @@ function renderAttachPreview(){
 
 // ---------- Send ----------
 async function sendMessage(){
+  // 🔧 Read keys & tool toggles live so you don't have to press “Save”
+  keys.openai   = elm("keyOpenAI").value.trim();
+  keys.anthropic= elm("keyAnthropic").value.trim();
+  keys.gemini   = elm("keyGemini").value.trim();
+  tool.searchEnabled = elm("searchToggle").checked;
+  tool.cse_key  = elm("cseKey").value.trim();
+  tool.cse_cx   = elm("cseCx").value.trim();
+
+  // (optional) auto-save keys to localStorage if the checkbox is on
+  if (elm("rememberKeys").checked) {
+    saveTool();
+    saveKeysIfAllowed(); // persists keys
+  }
+
   const ch = ensureChat();
   const text = elm("inputBox").value.trim();
   const sys = elm("systemPrompt").value.trim() || DEFAULT_SYSTEM;
@@ -970,9 +984,9 @@ async function sendMessage(){
   const maxOut = parseInt(elm("maxOut").value, 10) || 2048;
 
   // Require key for selected provider
-  if (current.provider==="openai" && !keys.openai) { alert("Please enter your OpenAI API key in Keys & Tools"); return; }
-  if (current.provider==="anthropic" && !keys.anthropic) { alert("Please enter your Anthropic API key"); return; }
-  if (current.provider==="gemini" && !keys.gemini) { alert("Please enter your Gemini API key"); return; }
+  if (current.provider==="openai" && !keys.openai)   { alert("Please enter your OpenAI API key in Keys & Tools"); return; }
+  if (current.provider==="anthropic" && !keys.anthropic){ alert("Please enter your Anthropic API key"); return; }
+  if (current.provider==="gemini" && !keys.gemini)   { alert("Please enter your Gemini API key"); return; }
 
   const lim = (MODEL_LIMITS[current.provider]||{})[current.model];
   if (lim && maxOut > lim.max_output){ alert(`Max output exceeds model limit (${lim.max_output})`); return; }
@@ -986,7 +1000,6 @@ async function sendMessage(){
     if ((a.mime||"").startsWith("image/")) {
       userMsg.content.push({type:"image", dataUrl: a.dataUrl});
     } else {
-      // non-image: for simplicity, include name + note; (could add server-side extract if needed)
       userMsg.content.push({type:"text", text: `[Attached: ${a.name}]`});
     }
   });
@@ -1004,11 +1017,11 @@ async function sendMessage(){
     temperature: temp,
     max_output: maxOut,
     messages: ch.messages,
-    keys,
+    keys,                    // ← now contains the latest inputs
     search: {
-      enabled: elm("searchToggle").checked,
-      cse_key: elm("cseKey").value.trim(),
-      cse_cx:  elm("cseCx").value.trim()
+      enabled: tool.searchEnabled,
+      cse_key: tool.cse_key,
+      cse_cx:  tool.cse_cx
     }
   };
 
