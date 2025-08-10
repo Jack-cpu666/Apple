@@ -1,76 +1,8 @@
-# -- Web Framework & Server --
-gunicorn
-Flask[async]
-Flask-Cors
-Flask-Limiter
-Flask-Caching
-werkzeug
-markupsafe
+Flask==3.0.3
+requests==2.32.3
+gunicorn==22.0.0
 
-# -- Core AI & Data Science --
-openai
-httpx
-pandas
-numpy
-scikit-learn
-pytesseract
-
-# -- File Processing & Parsing --
-Pillow
-PyPDF2
-python-docx
-openpyxl
-beautifulsoup4
-Markdown
-Pygments
-python-magic
-chardet
-aiofiles
-PyMuPDF
-pdfplumber
-camelot-py[cv]
-tabula-py
-ebooklib
-rarfile
-py7zr
-python-pptx
-xlrd
-odfpy
-icalendar
-vobject
-eml-parser
-extract-msg
-svgwrite
-
-# -- Machine Learning & NLP (CPU VERSION) --
-# Note: Removed torch and heavy ML dependencies to reduce footprint
-transformers
-SpeechRecognition
-textstat
-nltk
-librosa
-soundfile
-
-# -- Specialized Scientific Libraries --
-# WARNING: These are large and increase build times. Remove any you don't need.
-opencv-python-headless
-biopython
-pydicom
-nibabel
-rdkit-pypi
-
-# -- Visual & Geospatial Libraries --
-# WARNING: These are VERY large. If your app can run without them, REMOVE them.
-matplotlib
-seaborn
-plotly
-networkx
-wordcloud
-folium
-geopandas
-rasterio
-xarray
-
-# -- Utilities --
-PyJWT
-redis
+# optional SDKs (the app uses REST, but these are handy to have)
+openai==1.46.0
+anthropic==0.38.0
+google-generativeai==0.7.2
