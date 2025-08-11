@@ -1,10 +1,7 @@
 # app.py
-# NovaMind — a clean, mobile-first chat UI powered under the hood
-# by Google's Gemini API (hidden from users). Two creative modes:
-# "Sage" (deeper reasoning) and "Spark" (faster replies).
-#
-# Defaults you asked for: temperature=1, thinking_budget=20000,
-# correct token limits & robust failover (Sage -> Spark) if rate-limited.
+# NovaMind — A clean, mobile-first chat UI with hidden Gemini backend
+# Two modes: Sage (deep reasoning) and Spark (fast)
+# Hard-coded helpful system prompt + identity rule + attachment fixes
 
 import os, base64, json, mimetypes, time, re, tempfile
 from urllib.request import Request, urlopen
@@ -18,27 +15,26 @@ APP_TITLE = "NovaMind"
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR") or os.path.join(tempfile.gettempdir(), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# Hard-coded Google (Gemini) API key — used ONLY on the server (never exposed to the browser)
-# You asked to hardcode this exact key:
+# Hard-coded Google Gemini API key — server-side only
 GEMINI_KEYS = ["AIzaSyBqQQszYifOVY6396kV9lkEs1Tz3cSdmVo"]
 
-# UI model ids (no provider terms shown to users)
+# UI model ids (no provider terms)
 NOVA_MODELS = [
     {"id": "sage",  "label": "NovaMind — Sage (thinks deeper)"},
     {"id": "spark", "label": "NovaMind — Spark (answers faster)"},
 ]
 
-# Internal mapping (server-only, users never see this)
+# Internal mapping
 MODEL_MAP = {
     "sage":  "gemini-2.5-pro",
     "spark": "gemini-2.5-flash",
 }
 
-# Token clamps & thinking budgets
+# Token clamps
 MAX_INPUT_TOKENS  = 1_048_576
 MAX_OUTPUT_TOKENS = 65_535
-SAGE_BUDGET_MIN,  SAGE_BUDGET_MAX  = 128,   32_768   # gemini-2.5-pro
-SPARK_BUDGET_MIN, SPARK_BUDGET_MAX = 0,     24_576   # gemini-2.5-flash
+SAGE_BUDGET_MIN,  SAGE_BUDGET_MAX  = 128,   32_768
+SPARK_BUDGET_MIN, SPARK_BUDGET_MAX = 0,     24_576
 
 # =========================
 # Flask app & CORS
@@ -77,13 +73,6 @@ def http_json(method, url, headers=None, data=None, timeout=120):
     except URLError as e:
         return None, {"status": 0, "error": str(e)}
 
-def fetch_bytes(url, max_mb=20):
-    with urlopen(url) as r:
-        b = r.read()
-        if len(b) > max_mb * 1024 * 1024:
-            raise ValueError("File too large")
-        return b
-
 def guess_mime(name_or_bytes):
     if isinstance(name_or_bytes, bytes):
         b = name_or_bytes[:16]
@@ -109,7 +98,6 @@ def _is_quota_or_busy(err):
     return False
 
 def _extract_text_and_thoughts(data):
-    """Return (text, thoughts_summary) from API response."""
     try:
         cands = (data or {}).get("candidates") or []
         if not cands: return None, ""
@@ -132,6 +120,30 @@ def _extract_text_and_thoughts(data):
     except Exception:
         return None, ""
 
+# ===== Attachment bytes: support local '/uploads/...' paths =====
+def fetch_bytes(url, max_mb=20):
+    """
+    Read bytes for either:
+    - local uploads: '/uploads/<fname>' -> read from UPLOAD_DIR
+    - absolute http(s) URLs -> urlopen
+    """
+    if isinstance(url, bytes):
+        return url
+    if isinstance(url, str) and url.startswith("/uploads/"):
+        fname = url.split("/uploads/", 1)[1]
+        path = os.path.join(UPLOAD_DIR, fname)
+        with open(path, "rb") as f:
+            b = f.read()
+            if len(b) > max_mb * 1024 * 1024:
+                raise ValueError("File too large")
+            return b
+    # fallback to remote fetch
+    with urlopen(url) as r:
+        b = r.read()
+        if len(b) > max_mb * 1024 * 1024:
+            raise ValueError("File too large")
+        return b
+
 # =========================
 # Gemini (server-side only)
 # =========================
@@ -153,8 +165,10 @@ def _gemini_generate(model_id, system_prompt, messages, cfg, key):
         for att in turn.get("attachments", []):
             url = att.get("url")
             if not url: continue
-            try: b = fetch_bytes(url)
-            except Exception: continue
+            try:
+                b = fetch_bytes(url)
+            except Exception:
+                continue
             mime = att.get("mime") or guess_mime(url) or "image/png"
             parts.append({"inlineData":{"mimeType": mime, "data": base64.b64encode(b).decode("utf-8")}})
         return parts
@@ -170,7 +184,6 @@ def _gemini_generate(model_id, system_prompt, messages, cfg, key):
     data, err = http_json("POST", base, {}, payload, timeout=120)
     if err: return None, None, err
 
-    # Handle promptFeedback "blocked" situations cleanly
     pf = data.get("promptFeedback") or {}
     if pf.get("blockReason"):
         return None, None, {"status":"BLOCKED","error":pf}
@@ -191,15 +204,11 @@ def _gemini_generate(model_id, system_prompt, messages, cfg, key):
 def novamind_chat_with_failover(ui_model, system_prompt, messages, cfg):
     if not GEMINI_KEYS:
         return None, None, {"error":"Server key not configured"}
-    # Try requested first, then the other
     primary = MODEL_MAP.get(ui_model, MODEL_MAP["sage"])
     secondary = MODEL_MAP["spark"] if primary == MODEL_MAP["sage"] else MODEL_MAP["sage"]
     models = [primary, secondary]
-
-    # rotate keys
     start = globals().get("_g_rr", 0) % len(GEMINI_KEYS)
     keys = GEMINI_KEYS[start:] + GEMINI_KEYS[:start]
-
     last_err = None
     for mid in models:
         for k in keys:
@@ -218,7 +227,6 @@ def novamind_chat_with_failover(ui_model, system_prompt, messages, cfg):
 # =========================
 @app.route("/api/models")
 def api_models():
-    # Return only NovaMind names (no provider terms)
     return jsonify(NOVA_MODELS)
 
 @app.route("/api/upload", methods=["POST", "OPTIONS"])
@@ -245,7 +253,9 @@ def api_chat():
         return cors(make_response(("", 204)))
     data = request.get_json(force=True, silent=True) or {}
 
-    ui_model = data.get("model") or "sage"         # "sage" (default) or "spark"
+    ui_model = data.get("model") or "sage"
+
+    # --- Hard-coded system prompt with identity rule ---
     system_prompt = """You are NovaMind, an expert AI assistant who is unfailingly helpful, friendly, and deeply knowledgeable across all domains.
 
 Identity rules (highest priority):
@@ -269,17 +279,15 @@ Additional behavior rules:
 
 Your goal is to make the user feel they have a highly competent and generous expert partner who gives them more than they expected, especially when providing code.
 """
+
     messages = data.get("messages") or []
     attachments = data.get("attachments") or []
-
-    # attach pending uploads to last user turn
     if attachments:
         for i in range(len(messages)-1, -1, -1):
             if messages[i].get("role") == "user":
                 messages[i].setdefault("attachments", []).extend(attachments)
                 break
 
-    # ---- generation config (clamped) ----
     try: temperature = float(data.get("temperature") or 1.0)
     except: temperature = 1.0
     temperature = max(0.0, min(2.0, temperature))
@@ -295,7 +303,7 @@ Your goal is to make the user feel they have a highly competent and generous exp
     else:
         budget = max(SPARK_BUDGET_MIN, min(SPARK_BUDGET_MAX, budget))
 
-    include_thoughts = bool(data.get("include_thoughts"))  # default False
+    include_thoughts = bool(data.get("include_thoughts"))
 
     cfg = {
         "temperature": temperature,
@@ -311,13 +319,12 @@ Your goal is to make the user feel they have a highly competent and generous exp
         out, meta, err = novamind_chat_with_failover(ui_model, system_prompt, messages, cfg)
         if err:
             return jsonify({"error": err}), 502
-        # Never leak provider names; meta only has usage and anonymized mode
         return jsonify({"output": out, "meta": meta})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 # =========================
-# Minimal, clean UI (mobile-first)
+# UI
 # =========================
 HTML = """<!doctype html>
 <html lang="en">
@@ -344,8 +351,7 @@ HTML = """<!doctype html>
   .bubble-a { background: rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08); border-radius:16px 16px 16px 4px; }
   .markdown pre { background: rgba(0,0,0,.45); padding:12px; border-radius:12px; overflow:auto; }
   .chip { background: rgba(99,102,241,.15); border:1px solid rgba(99,102,241,.35); }
-  header .brand { letter-spacing: .3px; }
-  summary { outline: none; }
+  .thumb { max-height: 96px; object-fit: cover; border-radius: 10px; border: 1px solid rgba(255,255,255,.08); }
 </style>
 </head>
 <body>
@@ -417,15 +423,39 @@ const budgetEl = $("#budget"), includeThoughtsEl = $("#includeThoughts"), budget
 let files = [];
 let state = { messages: [], model: "sage" };
 
-function addBubble(role, text, thoughts){
+function addBubble(role, text, attachments=[], thoughts=""){
   const wrap = document.createElement("div");
   wrap.className = "mb-3 flex " + (role==="user" ? "justify-end" : "justify-start");
   const b = document.createElement("div");
   b.className = (role==="user" ? "bubble-u" : "bubble-a") + " p-3 sm:p-4 rounded-2xl max-w-[90%]";
   const who = document.createElement("div"); who.className="text-[10px] uppercase tracking-wide text-slate-400 mb-1";
   who.textContent = role==="user" ? "You" : "Assistant"; b.appendChild(who);
-  const md = document.createElement("div"); md.className="markdown text-sm";
-  md.innerHTML = window.marked.parse(text || ""); b.appendChild(md);
+
+  if (text && text.trim()){
+    const md = document.createElement("div"); md.className="markdown text-sm";
+    md.innerHTML = window.marked.parse(text); b.appendChild(md);
+  }
+
+  // ---- thumbnails for attachments ----
+  if (attachments && attachments.length){
+    const grid = document.createElement("div"); grid.className="grid grid-cols-2 gap-2 mt-3";
+    attachments.forEach(a=>{
+      const mime = (a.mime||"");
+      if (mime.startsWith("image/")){
+        const img = document.createElement("img");
+        img.src = a.url; img.alt = a.name || "image"; img.className = "thumb cursor-pointer hover:opacity-90 transition";
+        img.onclick = ()=> window.open(a.url, "_blank");
+        grid.appendChild(img);
+      } else {
+        const link = document.createElement("a");
+        link.href = a.url; link.target="_blank"; link.className="chip rounded-lg px-3 py-1.5 text-xs";
+        link.textContent = a.name || a.url;
+        grid.appendChild(link);
+      }
+    });
+    b.appendChild(grid);
+  }
+
   if (thoughts && thoughts.trim()){
     const th = document.createElement("details");
     th.className="mt-2";
@@ -433,6 +463,7 @@ function addBubble(role, text, thoughts){
                     <div class="text-xs mt-1 text-slate-300 whitespace-pre-wrap">${thoughts}</div>`;
     b.appendChild(th);
   }
+
   wrap.appendChild(b); chat.appendChild(wrap); chat.scrollTop = chat.scrollHeight;
 }
 
@@ -452,8 +483,7 @@ async function loadModels(){
       const opt = document.createElement("option"); opt.value=m.id; opt.textContent=m.label;
       modelEl.appendChild(opt);
     }
-    modelEl.value = state.model;
-    syncBudgetRange();
+    modelEl.value = state.model; syncBudgetRange();
   }catch(e){
     modelEl.innerHTML = `<option value="sage">NovaMind — Sage (thinks deeper)</option><option value="spark">NovaMind — Spark (answers faster)</option>`;
   }
@@ -494,7 +524,7 @@ sendBtn.addEventListener("click", async ()=>{
 
   const atts = files.slice(); files = []; chips.innerHTML="";
   state.messages.push({role:"user", content:text, attachments:atts});
-  addBubble("user", text);
+  addBubble("user", text, atts);              // <-- show thumbnails immediately
   promptEl.value=""; setStatus("Thinking...","loading");
 
   // local clamp (server clamps again)
@@ -509,9 +539,9 @@ sendBtn.addEventListener("click", async ()=>{
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
         model: state.model,
-        system_prompt: "",
-        messages: state.messages,
-        attachments: [],
+        system_prompt: "",                 // server uses built-in system prompt
+        messages: state.messages,          // includes attachments on the user turn
+        attachments: [],                   // not needed; already embedded
         temperature: temp,
         max_output_tokens: maxOut,
         thinking_budget: budget,
@@ -523,7 +553,7 @@ sendBtn.addEventListener("click", async ()=>{
     const out = (data.output||"").trim();
     const thoughts = data.meta?.thoughts || "";
     state.messages.push({role:"assistant", content: out});
-    addBubble("assistant", out, thoughts);
+    addBubble("assistant", out, [], thoughts);
     setStatus("Ready");
   }catch(e){
     console.error(e);
