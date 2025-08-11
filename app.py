@@ -8,7 +8,7 @@ from flask import Flask, request, send_from_directory, make_response, jsonify, R
 APP_TITLE = "All-in-One AI Chat (OpenAI • Claude • Gemini)"
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR")
 if not UPLOAD_DIR:
-UPLOAD_DIR = os.path.join(tempfile.gettempdir(), “uploads”)
+UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "uploads")
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
