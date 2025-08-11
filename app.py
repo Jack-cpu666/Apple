@@ -8,375 +8,373 @@ from flask import Flask, request, send_from_directory, make_response, jsonify, R
 APP_TITLE = "All-in-One AI Chat (OpenAI • Claude • Gemini)"
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR")
 if not UPLOAD_DIR:
-UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "uploads")
+    UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "uploads")
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-app = Flask(**name**, static_folder=None)
+app = Flask(__name__, static_folder=None)
 
 def cors(resp):
-resp.headers[“Access-Control-Allow-Origin”] = “*”
-resp.headers[“Access-Control-Allow-Headers”] = “Content-Type, Authorization”
-resp.headers[“Access-Control-Allow-Methods”] = “GET, POST, OPTIONS”
-return resp
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return resp
 
 @app.after_request
 def _after(resp):
-return cors(resp)
+    return cors(resp)
 
-@app.route(”/health”)
+@app.route("/health")
 def health():
-return “ok”
+    return "ok"
 
 def read_env(name, default=None):
-v = os.environ.get(name, default)
-return v if (v is not None and v.strip() != “”) else None
+    v = os.environ.get(name, default)
+    return v if (v is not None and str(v).strip() != "") else None
 
-OPENAI_KEY_SERVER = read_env(“OPENAI_API_KEY_SERVER”)
-ANTHROPIC_KEY_SERVER = read_env(“ANTHROPIC_API_KEY_SERVER”)
-GEMINI_KEYS = [k for k in [read_env(“GEMINI_KEY_1”), read_env(“GEMINI_KEY_2”)] if k]
-GOOGLE_SEARCH_KEY = read_env(“GOOGLE_SEARCH_KEY”)
-GOOGLE_SEARCH_CX  = read_env(“GOOGLE_SEARCH_CX”)
+OPENAI_KEY_SERVER = read_env("OPENAI_API_KEY_SERVER")
+ANTHROPIC_KEY_SERVER = read_env("ANTHROPIC_API_KEY_SERVER")
+GEMINI_KEYS = [k for k in [read_env("GEMINI_KEY_1"), read_env("GEMINI_KEY_2")] if k]
+GOOGLE_SEARCH_KEY = read_env("GOOGLE_SEARCH_KEY")
+GOOGLE_SEARCH_CX  = read_env("GOOGLE_SEARCH_CX")
 
 def http_json(method, url, headers=None, data=None, timeout=60):
-body = json.dumps(data).encode(“utf-8”) if data is not None else None
-req = Request(url, data=body, method=method.upper())
-req.add_header(“Content-Type”, “application/json”)
-if headers:
-for k, v in headers.items():
-req.add_header(k, v)
-try:
-with urlopen(req, timeout=timeout) as r:
-return json.loads(r.read().decode(“utf-8”)), None
-except HTTPError as e:
-try:
-err = e.read().decode(“utf-8”)
-except Exception:
-err = str(e)
-return None, {“status”: e.code, “error”: err}
-except URLError as e:
-return None, {“status”: 0, “error”: str(e)}
+    body = json.dumps(data).encode("utf-8") if data is not None else None
+    req = Request(url, data=body, method=method.upper())
+    req.add_header("Content-Type", "application/json")
+    if headers:
+        for k, v in headers.items():
+            req.add_header(k, v)
+    try:
+        with urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8")), None
+    except HTTPError as e:
+        try:
+            err = e.read().decode("utf-8")
+        except Exception:
+            err = str(e)
+        return None, {"status": e.code, "error": err}
+    except URLError as e:
+        return None, {"status": 0, "error": str(e)}
 
 def fetch_bytes(url, max_mb=20):
-with urlopen(url) as r:
-b = r.read()
-if len(b) > max_mb * 1024 * 1024:
-raise ValueError(“File too large”)
-return b
+    with urlopen(url) as r:
+        b = r.read()
+        if len(b) > max_mb * 1024 * 1024:
+            raise ValueError("File too large")
+        return b
 
 def guess_mime(name_or_bytes):
-if isinstance(name_or_bytes, bytes):
-b = name_or_bytes[:16]
-if b.startswith(b”\x89PNG”): return “image/png”
-if b.startswith(b”\xff\xd8”): return “image/jpeg”
-if b[:4] == b”GIF8”: return “image/gif”
-if b[:4] == b”%PDF”: return “application/pdf”
-mt, _ = mimetypes.guess_type(str(name_or_bytes))
-return mt or “application/octet-stream”
+    if isinstance(name_or_bytes, bytes):
+        b = name_or_bytes[:16]
+        if b.startswith(b"\x89PNG"): return "image/png"
+        if b.startswith(b"\xff\xd8"): return "image/jpeg"
+        if b[:4] == b"GIF8": return "image/gif"
+        if b[:4] == b"%PDF": return "application/pdf"
+    mt, _ = mimetypes.guess_type(str(name_or_bytes))
+    return mt or "application/octet-stream"
 
 def google_search_top(q, n=3):
-if not (GOOGLE_SEARCH_KEY and GOOGLE_SEARCH_CX):
-return []
-base = “https://www.googleapis.com/customsearch/v1”
-params = {“key”: GOOGLE_SEARCH_KEY, “cx”: GOOGLE_SEARCH_CX, “q”: q}
-url = f”{base}?{urlencode(params)}”
-try:
-with urlopen(url, timeout=15) as r:
-data = json.loads(r.read().decode(“utf-8”))
-items = data.get(“items”, [])[:n]
-out = []
-for it in items:
-out.append({
-“title”: it.get(“title”),
-“snippet”: it.get(“snippet”),
-“link”: it.get(“link”)
-})
-return out
-except Exception:
-return []
+    if not (GOOGLE_SEARCH_KEY and GOOGLE_SEARCH_CX):
+        return []
+    base = "https://www.googleapis.com/customsearch/v1"
+    params = {"key": GOOGLE_SEARCH_KEY, "cx": GOOGLE_SEARCH_CX, "q": q}
+    url = f"{base}?{urlencode(params)}"
+    try:
+        with urlopen(url, timeout=15) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            items = data.get("items", [])[:n]
+            out = []
+            for it in items:
+                out.append({
+                    "title": it.get("title"),
+                    "snippet": it.get("snippet"),
+                    "link": it.get("link")
+                })
+            return out
+    except Exception:
+        return []
 
 def build_search_context(results):
-if not results: return “”
-lines = [”[Search context]\n”]
-for i, r in enumerate(results, 1):
-lines.append(f”{i}. {r[‘title’]}\n{r[‘snippet’]}\n{r[‘link’]}\n”)
-return “\n”.join(lines)
+    if not results: return ""
+    lines = ["[Search context]\n"]
+    for i, r in enumerate(results, 1):
+        lines.append(f"{i}. {r['title']}\n{r['snippet']}\n{r['link']}\n")
+    return "\n".join(lines)
 
 _gemini_rr = 0
 def pick_gemini_key():
-global _gemini_rr
-if GEMINI_KEYS:
-key = GEMINI_KEYS[_gemini_rr % len(GEMINI_KEYS)]
-_gemini_rr += 1
-return key
-return None
+    global _gemini_rr
+    if GEMINI_KEYS:
+        key = GEMINI_KEYS[_gemini_rr % len(GEMINI_KEYS)]
+        _gemini_rr += 1
+        return key
+    return None
 
 def normalize_messages_for_last_user_images(messages, attachments):
-msgs = list(messages)
-if attachments:
-for i in range(len(msgs)-1, -1, -1):
-if msgs[i].get(“role”) == “user”:
-extras = msgs[i].setdefault(“attachments”, [])
-extras.extend(attachments)
-break
-return msgs
+    msgs = list(messages)
+    if attachments:
+        for i in range(len(msgs)-1, -1, -1):
+            if msgs[i].get("role") == "user":
+                extras = msgs[i].setdefault("attachments", [])
+                extras.extend(attachments)
+                break
+    return msgs
 
 def openai_chat(model, system_prompt, messages, key):
-api = “https://api.openai.com/v1/responses”
-headers = {“Authorization”: f”Bearer {key}”}
+    api = "https://api.openai.com/v1/responses"
+    headers = {"Authorization": f"Bearer {key}"}
 
-```
-def to_parts(turn):
-    parts = []
-    text = turn.get("content") or ""
-    if text:
-        parts.append({"type": "input_text", "text": text})
-    for att in turn.get("attachments", []):
-        url = att.get("url")
-        mime = att.get("mime") or guess_mime(url)
-        if url and mime.startswith("image/"):
-            parts.append({"type": "input_image", "image_url": url})
-    return parts
+    def to_parts(turn):
+        parts = []
+        text = turn.get("content") or ""
+        if text:
+            parts.append({"type": "input_text", "text": text})
+        for att in turn.get("attachments", []):
+            url = att.get("url")
+            mime = att.get("mime") or guess_mime(url)
+            if url and mime and str(mime).startswith("image/"):
+                parts.append({"type": "input_image", "image_url": url})
+        return parts
 
-input_list = []
-if system_prompt and system_prompt.strip():
-    input_list.append({"role": "system", "content":[{"type":"text","text": system_prompt}]})
-for m in messages:
-    role = m.get("role","user")
-    if role == "user":
-        content = to_parts(m)
-        input_list.append({"role":"user","content":content})
-    elif role == "assistant":
-        input_list.append({"role":"assistant","content":[{"type":"output_text","text": m.get("content","")}]})
-    else:
-        input_list.append({"role":"user","content":[{"type":"input_text","text": m.get("content","")}]})
+    input_list = []
+    if system_prompt and system_prompt.strip():
+        input_list.append({"role": "system", "content":[{"type":"text","text": system_prompt}]})
+    for m in messages:
+        role = m.get("role","user")
+        if role == "user":
+            content = to_parts(m)
+            input_list.append({"role":"user","content":content})
+        elif role == "assistant":
+            input_list.append({"role":"assistant","content":[{"type":"output_text","text": m.get("content","")}]})
+        else:
+            input_list.append({"role":"user","content":[{"type":"input_text","text": m.get("content","")}]})
 
-payload = {"model": model, "input": input_list, "max_output_tokens": 1024}
-data, err = http_json("POST", api, headers, payload, timeout=120)
-if not err and data:
-    if "output_text" in data and data["output_text"]:
-        return data["output_text"], {"provider":"openai","model":model}, None
+    payload = {"model": model, "input": input_list, "max_output_tokens": 1024}
+    data, err = http_json("POST", api, headers, payload, timeout=120)
+    if not err and data:
+        if "output_text" in data and data["output_text"]:
+            return data["output_text"], {"provider":"openai","model":model}, None
+        try:
+            blocks = data.get("output", []) or data.get("response", {}).get("output", [])
+            texts = []
+            for b in blocks:
+                for c in b.get("content", []):
+                    if c.get("type") in ("output_text","text"):
+                        texts.append(c.get("text",""))
+            if texts:
+                return "\n".join(texts), {"provider":"openai","model":model}, None
+        except Exception:
+            pass
+
+    # Fallback to chat.completions if /responses isn't available
+    api2 = "https://api.openai.com/v1/chat/completions"
+    msg_list = []
+    if system_prompt and system_prompt.strip():
+        msg_list.append({"role":"system","content":system_prompt})
+    for m in messages:
+        role = m.get("role","user")
+        content_text = m.get("content","")
+        parts = []
+        if content_text:
+            parts.append({"type":"text","text":content_text})
+        for att in m.get("attachments", []):
+            url = att.get("url")
+            mime = att.get("mime") or guess_mime(url)
+            if url and mime and str(mime).startswith("image/"):
+                parts.append({"type":"image_url","image_url":{"url": url}})
+        msg_list.append({"role": role, "content": parts if parts else content_text})
+
+    payload2 = {"model": model, "messages": msg_list, "temperature": 0.2}
+    data2, err2 = http_json("POST", api2, headers, payload2, timeout=120)
+    if err2:
+        return None, None, err2
     try:
-        blocks = data.get("output", []) or data.get("response", {}).get("output", [])
-        texts = []
-        for b in blocks:
-            for c in b.get("content", []):
-                if c.get("type") in ("output_text","text"):
-                    texts.append(c.get("text",""))
-        if texts:
-            return "\n".join(texts), {"provider":"openai","model":model}, None
+        txt = data2["choices"][0]["message"]["content"]
     except Exception:
-        pass
-
-api2 = "https://api.openai.com/v1/chat/completions"
-msg_list = []
-if system_prompt and system_prompt.strip():
-    msg_list.append({"role":"system","content":system_prompt})
-for m in messages:
-    role = m.get("role","user")
-    content_text = m.get("content","")
-    parts = []
-    if content_text:
-        parts.append({"type":"text","text":content_text})
-    for att in m.get("attachments", []):
-        url = att.get("url")
-        mime = att.get("mime") or guess_mime(url)
-        if url and mime.startswith("image/"):
-            parts.append({"type":"image_url","image_url":{"url": url}})
-    msg_list.append({"role": role, "content": parts if parts else content_text})
-
-payload2 = {"model": model, "messages": msg_list, "temperature": 0.2}
-data2, err2 = http_json("POST", api2, headers, payload2, timeout=120)
-if err2:
-    return None, None, err2
-try:
-    txt = data2["choices"][0]["message"]["content"]
-except Exception:
-    txt = json.dumps(data2)
-return txt, {"provider":"openai","model":model}, None
-```
+        txt = json.dumps(data2)
+    return txt, {"provider":"openai","model":model}, None
 
 def anthropic_chat(model, system_prompt, messages, key):
-api = “https://api.anthropic.com/v1/messages”
-headers = {“x-api-key”: key, “anthropic-version”: “2023-06-01”}
+    api = "https://api.anthropic.com/v1/messages"
+    headers = {"x-api-key": key, "anthropic-version": "2023-06-01"}
 
-```
-def to_content(turn):
-    parts = []
-    txt = turn.get("content") or ""
-    if txt:
-        parts.append({"type":"text","text": txt})
-    for att in turn.get("attachments", []):
-        url = att.get("url")
-        if not url: continue
-        try:
-            b = fetch_bytes(url)
-        except Exception:
+    def to_content(turn):
+        parts = []
+        txt = turn.get("content") or ""
+        if txt:
+            parts.append({"type":"text","text": txt})
+        for att in turn.get("attachments", []):
+            url = att.get("url")
+            if not url: 
+                continue
+            try:
+                b = fetch_bytes(url)
+            except Exception:
+                continue
+            mime = att.get("mime") or guess_mime(url) or "image/png"
+            parts.append({
+                "type":"image",
+                "source":{
+                    "type":"base64",
+                    "media_type": mime,
+                    "data": base64.b64encode(b).decode("utf-8")
+                }
+            })
+        return parts
+
+    msgs = []
+    sys = system_prompt.strip() if system_prompt and system_prompt.strip() else None
+    for m in messages:
+        if m.get("role") == "assistant":
             continue
-        mime = att.get("mime") or guess_mime(url) or "image/png"
-        parts.append({
-            "type":"image",
-            "source":{
-                "type":"base64",
-                "media_type": mime,
-                "data": base64.b64encode(b).decode("utf-8")
-            }
-        })
-    return parts
+        msgs.append({"role":"user", "content": to_content(m)})
 
-msgs = []
-sys = system_prompt.strip() if system_prompt and system_prompt.strip() else None
-for m in messages:
-    if m.get("role") == "assistant":
-        continue
-    msgs.append({"role":"user", "content": to_content(m)})
+    payload = {"model": model, "max_tokens": 1024, "messages": msgs}
+    if sys: 
+        payload["system"] = sys
 
-payload = {"model": model, "max_tokens": 1024, "messages": msgs}
-if sys: payload["system"] = sys
-
-data, err = http_json("POST", api, headers, payload, timeout=120)
-if err: return None, None, err
-try:
-    txts = []
-    for c in data["content"]:
-        if c.get("type") == "text":
-            txts.append(c.get("text",""))
-    return "\n".join(txts), {"provider":"anthropic","model":model}, None
-except Exception:
-    return json.dumps(data), {"provider":"anthropic","model":model}, None
-```
+    data, err = http_json("POST", api, headers, payload, timeout=120)
+    if err: 
+        return None, None, err
+    try:
+        txts = []
+        for c in data.get("content", []):
+            if c.get("type") == "text":
+                txts.append(c.get("text",""))
+        return "\n".join(txts), {"provider":"anthropic","model":model}, None
+    except Exception:
+        return json.dumps(data), {"provider":"anthropic","model":model}, None
 
 def gemini_chat(model, system_prompt, messages, key):
-base = f”https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}”
+    base = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
 
-```
-def to_parts(turn):
-    parts = []
-    txt = turn.get("content") or ""
-    if txt:
-        parts.append({"text": txt})
-    for att in turn.get("attachments", []):
-        url = att.get("url")
-        if not url: continue
-        try:
-            b = fetch_bytes(url)
-        except Exception:
-            continue
-        mime = att.get("mime") or guess_mime(url) or "image/png"
-        parts.append({"inlineData":{"mimeType": mime, "data": base64.b64encode(b).decode("utf-8")}})
-    return parts
+    def to_parts(turn):
+        parts = []
+        txt = turn.get("content") or ""
+        if txt:
+            parts.append({"text": txt})
+        for att in turn.get("attachments", []):
+            url = att.get("url")
+            if not url: 
+                continue
+            try:
+                b = fetch_bytes(url)
+            except Exception:
+                continue
+            mime = att.get("mime") or guess_mime(url) or "image/png"
+            parts.append({"inlineData":{"mimeType": mime, "data": base64.b64encode(b).decode("utf-8")}})
+        return parts
 
-contents = []
-if system_prompt and system_prompt.strip():
-    contents.append({"role":"user","parts":[{"text": f"[System]\n{system_prompt}"}]})
-for m in messages:
-    role = m.get("role","user")
-    contents.append({"role": "user" if role!="assistant" else "model", "parts": to_parts(m)})
+    contents = []
+    if system_prompt and system_prompt.strip():
+        contents.append({"role":"user","parts":[{"text": f"[System]\n{system_prompt}"}]})
+    for m in messages:
+        role = m.get("role","user")
+        contents.append({"role": "user" if role!="assistant" else "model", "parts": to_parts(m)})
 
-payload = {"contents": contents, "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1024}}
-data, err = http_json("POST", base, {}, payload, timeout=120)
-if err: return None, None, err
-try:
-    parts = data["candidates"][0]["content"]["parts"]
-    texts = []
-    for p in parts:
-        if "text" in p:
-            texts.append(p["text"])
-    return "\n".join(texts), {"provider":"gemini","model":model}, None
-except Exception:
-    return json.dumps(data), {"provider":"gemini","model":model}, None
-```
+    payload = {"contents": contents, "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1024}}
+    data, err = http_json("POST", base, {}, payload, timeout=120)
+    if err: 
+        return None, None, err
+    try:
+        parts = data["candidates"][0]["content"]["parts"]
+        texts = []
+        for p in parts:
+            if "text" in p:
+                texts.append(p["text"])
+        return "\n".join(texts), {"provider":"gemini","model":model}, None
+    except Exception:
+        return json.dumps(data), {"provider":"gemini","model":model}, None
 
-@app.route(”/api/upload”, methods=[“POST”, “OPTIONS”])
+@app.route("/api/upload", methods=["POST", "OPTIONS"])
 def upload():
-if request.method == “OPTIONS”:
-return cors(make_response((””, 204)))
-files = request.files.getlist(“files”)
-saved = []
-for f in files:
-name = f.filename
-ext = os.path.splitext(name)[1].lower()
-ts = int(time.time()*1000)
-safe = re.sub(r”[^a-zA-Z0-9_.-]”, “*”, name) or f”file{ts}{ext}”
-path = os.path.join(UPLOAD_DIR, f”{ts}*{safe}”)
-f.save(path)
-url = f”/uploads/{os.path.basename(path)}”
-saved.append({“name”: name, “url”: url, “mime”: guess_mime(name), “size”: os.path.getsize(path)})
-return jsonify({“files”: saved})
+    if request.method == "OPTIONS":
+        return cors(make_response(("", 204)))
+    files = request.files.getlist("files")
+    saved = []
+    for f in files:
+        name = f.filename
+        ext = os.path.splitext(name)[1].lower()
+        ts = int(time.time()*1000)
+        safe = re.sub(r"[^a-zA-Z0-9_.-]", "_", name) or f"file{ts}{ext}"
+        path = os.path.join(UPLOAD_DIR, f"{ts}_{safe}")
+        f.save(path)
+        url = f"/uploads/{os.path.basename(path)}"
+        saved.append({"name": name, "url": url, "mime": guess_mime(name), "size": os.path.getsize(path)})
+    return jsonify({"files": saved})
 
-@app.route(”/uploads/<path:fname>”)
+@app.route("/uploads/<path:fname>")
 def serve_upload(fname):
-return send_from_directory(UPLOAD_DIR, fname, as_attachment=False)
+    return send_from_directory(UPLOAD_DIR, fname, as_attachment=False)
 
-@app.route(”/api/chat”, methods=[“POST”, “OPTIONS”])
+@app.route("/api/chat", methods=["POST", "OPTIONS"])
 def api_chat():
-if request.method == “OPTIONS”:
-return cors(make_response((””, 204)))
-data = request.get_json(force=True, silent=True) or {}
-provider = (data.get(“provider”) or “openai”).lower()
-model = data.get(“model”) or “”
-system_prompt = data.get(“system_prompt”) or “”
-messages = data.get(“messages”) or []
-attachments = data.get(“attachments”) or []
-use_search = bool(data.get(“use_search”))
+    if request.method == "OPTIONS":
+        return cors(make_response(("", 204)))
+    data = request.get_json(force=True, silent=True) or {}
+    provider = (data.get("provider") or "openai").lower()
+    model = data.get("model") or ""
+    system_prompt = data.get("system_prompt") or ""
+    messages = data.get("messages") or []
+    attachments = data.get("attachments") or []
+    use_search = bool(data.get("use_search"))
 
-```
-messages = normalize_messages_for_last_user_images(messages, attachments)
+    messages = normalize_messages_for_last_user_images(messages, attachments)
 
-if use_search and GOOGLE_SEARCH_KEY and GOOGLE_SEARCH_CX:
-    last_user_text = ""
-    for m in reversed(messages):
-        if m.get("role") == "user":
-            last_user_text = m.get("content") or ""
-            break
-    if last_user_text:
-        results = google_search_top(last_user_text, n=3)
-        context = build_search_context(results)
-        if context:
-            system_prompt = (system_prompt + "\n\n" + context).strip()
+    if use_search and GOOGLE_SEARCH_KEY and GOOGLE_SEARCH_CX:
+        last_user_text = ""
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                last_user_text = m.get("content") or ""
+                break
+        if last_user_text:
+            results = google_search_top(last_user_text, n=3)
+            context = build_search_context(results)
+            if context:
+                system_prompt = (system_prompt + "\n\n" + context).strip()
 
-try:
-    if provider == "openai":
-        key = OPENAI_KEY_SERVER
-        if not key:
-            return jsonify({"error":"OpenAI API key not configured on server"}), 400
-        out, meta, err = openai_chat(model, system_prompt, messages, key)
-    elif provider == "anthropic":
-        key = ANTHROPIC_KEY_SERVER
-        if not key:
-            return jsonify({"error":"Anthropic API key not configured on server"}), 400
-        out, meta, err = anthropic_chat(model, system_prompt, messages, key)
-    elif provider == "google":
-        key = pick_gemini_key()
-        if not key:
-            return jsonify({"error":"Gemini API key not configured on server"}), 400
-        out, meta, err = gemini_chat(model, system_prompt, messages, key)
-    else:
-        return jsonify({"error":"Unknown provider"}), 400
+    try:
+        if provider == "openai":
+            key = OPENAI_KEY_SERVER
+            if not key:
+                return jsonify({"error":"OpenAI API key not configured on server"}), 400
+            out, meta, err = openai_chat(model, system_prompt, messages, key)
+        elif provider == "anthropic":
+            key = ANTHROPIC_KEY_SERVER
+            if not key:
+                return jsonify({"error":"Anthropic API key not configured on server"}), 400
+            out, meta, err = anthropic_chat(model, system_prompt, messages, key)
+        elif provider == "google":
+            key = pick_gemini_key()
+            if not key:
+                return jsonify({"error":"Gemini API key not configured on server"}), 400
+            out, meta, err = gemini_chat(model, system_prompt, messages, key)
+        else:
+            return jsonify({"error":"Unknown provider"}), 400
 
-    if err:
-        if provider == "google" and len(GEMINI_KEYS) > 1:
-            alt = GEMINI_KEYS[1] if GEMINI_KEYS[0] == key else GEMINI_KEYS[0]
-            out2, meta2, err2 = gemini_chat(model, system_prompt, messages, alt)
-            if not err2:
-                return jsonify({"output": out2, "meta": meta2})
-        return jsonify({"error": err}), 502
+        if err:
+            if provider == "google" and len(GEMINI_KEYS) > 1:
+                alt = GEMINI_KEYS[1] if GEMINI_KEYS[0] == key else GEMINI_KEYS[0]
+                out2, meta2, err2 = gemini_chat(model, system_prompt, messages, alt)
+                if not err2:
+                    return jsonify({"output": out2, "meta": meta2})
+            return jsonify({"error": err}), 502
 
-    return jsonify({"output": out, "meta": meta})
-except Exception as e:
-    return jsonify({"error": str(e)}), 500
-```
+        return jsonify({"output": out, "meta": meta})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-@app.route(”/api/search”, methods=[“POST”])
+@app.route("/api/search", methods=["POST"])
 def api_search():
-data = request.get_json(force=True, silent=True) or {}
-q = data.get(“q”,””).strip()
-if not q:
-return jsonify({“results”:[]})
-res = google_search_top(q, n=5)
-return jsonify({“results”: res})
+    data = request.get_json(force=True, silent=True) or {}
+    q = (data.get("q","") or "").strip()
+    if not q:
+        return jsonify({"results":[]})
+    res = google_search_top(q, n=5)
+    return jsonify({"results": res})
 
-HTML_TEMPLATE = “””<!doctype html>
+HTML_TEMPLATE = """<!doctype html>
 
 <html lang="en">
 <head>
@@ -490,7 +488,6 @@ HTML_TEMPLATE = “””<!doctype html>
   }
   .scrollbar-thin {
     scrollbar-width: thin;
-    scrollbar-color: #4b5563 transparent;
   }
   .scrollbar-thin::-webkit-scrollbar {
     width: 6px;
@@ -550,103 +547,100 @@ HTML_TEMPLATE = “””<!doctype html>
         </svg>
       </button>
 
-```
-  <aside id="sidebar" class="lg:col-span-3 space-y-6 mobile-menu fixed lg:relative inset-y-0 left-0 z-40 w-80 lg:w-auto p-6 lg:p-0 glass-dark lg:bg-transparent">
-    <div class="glass rounded-2xl p-6">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-xl font-semibold">Conversations</h2>
-        <button id="newChat" class="btn-primary px-4 py-2 rounded-xl text-sm font-medium">
-          New Chat
-        </button>
-      </div>
-      <div id="chatList" class="space-y-2 max-h-[40vh] overflow-y-auto scrollbar-thin pr-2"></div>
-      <div class="mt-4 flex flex-wrap gap-2">
-        <button id="exportChats" class="btn-secondary px-3 py-1.5 rounded-lg text-sm">Export</button>
-        <label class="btn-secondary px-3 py-1.5 rounded-lg text-sm cursor-pointer">
-          Import<input type="file" id="importFile" class="hidden" accept=".json"/>
-        </label>
-        <button id="clearChats" class="btn-secondary px-3 py-1.5 rounded-lg text-sm text-red-400 hover:text-red-300">Clear All</button>
-      </div>
-    </div>
-
-    <div class="glass rounded-2xl p-6">
-      <h2 class="text-xl font-semibold mb-4">Select AI Model</h2>
-      <div class="grid grid-cols-1 gap-3">
-        <div class="model-card glass rounded-xl p-4" data-provider="openai">
-          <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white font-bold">O</div>
-            <div>
-              <h3 class="font-semibold">OpenAI</h3>
-              <p class="text-xs text-gray-400">GPT-4.1 & o3</p>
-            </div>
+      <aside id="sidebar" class="lg:col-span-3 space-y-6 mobile-menu fixed lg:relative inset-y-0 left-0 z-40 w-80 lg:w-auto p-6 lg:p-0 glass-dark lg:bg-transparent">
+        <div class="glass rounded-2xl p-6">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-xl font-semibold">Conversations</h2>
+            <button id="newChat" class="btn-primary px-4 py-2 rounded-xl text-sm font-medium">
+              New Chat
+            </button>
           </div>
-        </div>
-        <div class="model-card glass rounded-xl p-4" data-provider="anthropic">
-          <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center text-white font-bold">C</div>
-            <div>
-              <h3 class="font-semibold">Claude</h3>
-              <p class="text-xs text-gray-400">Opus 4.1 & Sonnet 4</p>
-            </div>
-          </div>
-        </div>
-        <div class="model-card glass rounded-xl p-4" data-provider="google">
-          <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-bold">G</div>
-            <div>
-              <h3 class="font-semibold">Gemini</h3>
-              <p class="text-xs text-gray-400">1.5 Pro & Flash</p>
-            </div>
-          </div>
-        </div>
-      </div>
-      <select id="model" class="w-full mt-4 bg-transparent border border-gray-600 rounded-xl px-4 py-2.5 focus:border-primary focus:outline-none"></select>
-      <div class="mt-4 flex items-center gap-3">
-        <input id="toggleSearch" type="checkbox" class="w-4 h-4 rounded border-gray-600 text-primary focus:ring-primary focus:ring-offset-0"/>
-        <label for="toggleSearch" class="text-sm">Enable Google Search</label>
-      </div>
-    </div>
-
-    <div class="glass rounded-2xl p-6">
-      <h2 class="text-xl font-semibold mb-4">System Instructions</h2>
-      <textarea id="systemPrompt" rows="6" class="w-full bg-transparent border border-gray-600 rounded-xl px-4 py-3 text-sm focus:border-primary focus:outline-none scrollbar-thin" placeholder="Set custom instructions for the AI..."></textarea>
-      <button id="resetSystem" class="btn-secondary px-3 py-1.5 rounded-lg text-sm mt-3">Reset to Default</button>
-    </div>
-  </aside>
-
-  <main class="lg:col-span-9 space-y-6">
-    <div id="chat" class="glass rounded-2xl p-6 h-[70vh] overflow-y-auto scrollbar-thin"></div>
-
-    <div class="glass rounded-2xl p-6">
-      <div class="flex items-start gap-4">
-        <div class="flex-1">
-          <textarea id="prompt" rows="3" placeholder="Type your message here..." class="w-full bg-transparent border border-gray-600 rounded-xl px-4 py-3 focus:border-primary focus:outline-none scrollbar-thin"></textarea>
-          <div class="flex items-center gap-3 mt-3">
-            <label class="btn-secondary px-4 py-2 rounded-xl text-sm cursor-pointer">
-              <svg class="w-5 h-5 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
-              </svg>
-              Attach Files
-              <input id="fileInput" type="file" class="hidden" multiple accept="image/*,.pdf,.txt,.md,.doc,.docx,.csv,.json,.xml"/>
+          <div id="chatList" class="space-y-2 max-h-[40vh] overflow-y-auto scrollbar-thin pr-2"></div>
+          <div class="mt-4 flex flex-wrap gap-2">
+            <button id="exportChats" class="btn-secondary px-3 py-1.5 rounded-lg text-sm">Export</button>
+            <label class="btn-secondary px-3 py-1.5 rounded-lg text-sm cursor-pointer">
+              Import<input type="file" id="importFile" class="hidden" accept=".json"/>
             </label>
-            <div id="fileChips" class="flex gap-2 flex-wrap"></div>
+            <button id="clearChats" class="btn-secondary px-3 py-1.5 rounded-lg text-sm text-red-400 hover:text-red-300">Clear All</button>
           </div>
         </div>
-        <button id="sendBtn" class="btn-primary px-6 py-3 rounded-xl font-medium">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
-          </svg>
-        </button>
-      </div>
-      <div class="flex items-center justify-between mt-4">
-        <span id="status" class="text-sm text-gray-400">Ready</span>
-        <span class="text-xs text-gray-500">Press Enter to send, Shift+Enter for new line</span>
-      </div>
-    </div>
-  </main>
-</div>
-```
 
+        <div class="glass rounded-2xl p-6">
+          <h2 class="text-xl font-semibold mb-4">Select AI Model</h2>
+          <div class="grid grid-cols-1 gap-3">
+            <div class="model-card glass rounded-xl p-4" data-provider="openai">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white font-bold">O</div>
+                <div>
+                  <h3 class="font-semibold">OpenAI</h3>
+                  <p class="text-xs text-gray-400">GPT-4.1 & o3</p>
+                </div>
+              </div>
+            </div>
+            <div class="model-card glass rounded-xl p-4" data-provider="anthropic">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center text-white font-bold">C</div>
+                <div>
+                  <h3 class="font-semibold">Claude</h3>
+                  <p class="text-xs text-gray-400">Opus 4.1 & Sonnet 4</p>
+                </div>
+              </div>
+            </div>
+            <div class="model-card glass rounded-xl p-4" data-provider="google">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-bold">G</div>
+                <div>
+                  <h3 class="font-semibold">Gemini</h3>
+                  <p class="text-xs text-gray-400">1.5 Pro & Flash</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <select id="model" class="w-full mt-4 bg-transparent border border-gray-600 rounded-xl px-4 py-2.5 focus:border-primary focus:outline-none"></select>
+          <div class="mt-4 flex items-center gap-3">
+            <input id="toggleSearch" type="checkbox" class="w-4 h-4 rounded border-gray-600 text-primary focus:ring-primary focus:ring-offset-0"/>
+            <label for="toggleSearch" class="text-sm">Enable Google Search</label>
+          </div>
+        </div>
+
+        <div class="glass rounded-2xl p-6">
+          <h2 class="text-xl font-semibold mb-4">System Instructions</h2>
+          <textarea id="systemPrompt" rows="6" class="w-full bg-transparent border border-gray-600 rounded-xl px-4 py-3 text-sm focus:border-primary focus:outline-none scrollbar-thin" placeholder="Set custom instructions for the AI..."></textarea>
+          <button id="resetSystem" class="btn-secondary px-3 py-1.5 rounded-lg text-sm mt-3">Reset to Default</button>
+        </div>
+      </aside>
+
+      <main class="lg:col-span-9 space-y-6">
+        <div id="chat" class="glass rounded-2xl p-6 h-[70vh] overflow-y-auto scrollbar-thin"></div>
+
+        <div class="glass rounded-2xl p-6">
+          <div class="flex items-start gap-4">
+            <div class="flex-1">
+              <textarea id="prompt" rows="3" placeholder="Type your message here..." class="w-full bg-transparent border border-gray-600 rounded-xl px-4 py-3 focus:border-primary focus:outline-none scrollbar-thin"></textarea>
+              <div class="flex items-center gap-3 mt-3">
+                <label class="btn-secondary px-4 py-2 rounded-xl text-sm cursor-pointer">
+                  <svg class="w-5 h-5 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
+                  </svg>
+                  Attach Files
+                  <input id="fileInput" type="file" class="hidden" multiple accept="image/*,.pdf,.txt,.md,.doc,.docx,.csv,.json,.xml"/>
+                </label>
+                <div id="fileChips" class="flex gap-2 flex-wrap"></div>
+              </div>
+            </div>
+            <button id="sendBtn" class="btn-primary px-6 py-3 rounded-xl font-medium">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+              </svg>
+            </button>
+          </div>
+          <div class="flex items-center justify-between mt-4">
+            <span id="status" class="text-sm text-gray-400">Ready</span>
+            <span class="text-xs text-gray-500">Press Enter to send, Shift+Enter for new line</span>
+          </div>
+        </div>
+      </main>
+    </div>
   </div>
 
 <script>
@@ -1033,18 +1027,29 @@ document.addEventListener("click", (e) => {
   }
 });
 
-updateModelSelection();
-loadState();
+function addOption(select, value, label){
+  const o = document.createElement("option");
+  o.value = value; o.textContent = label; select.appendChild(o);
+}
+
+function initModelSelect(){
+  const provider = "openai";
+  const presets = PRESETS[provider];
+  modelEl.innerHTML = "";
+  presets.forEach(m => addOption(modelEl, m.id, m.label));
+}
+
+initModelSelect();
 </script>
 
 </body>
 </html>"""
 
-@app.route(”/”)
+@app.route("/")
 def index():
-html = HTML_TEMPLATE.replace(”{{APP_TITLE}}”, APP_TITLE)
-return Response(html, mimetype=“text/html”)
+    html = HTML_TEMPLATE.replace("{{APP_TITLE}}", APP_TITLE)
+    return Response(html, mimetype="text/html")
 
-if **name** == “**main**”:
-port = int(os.environ.get(“PORT”, “10000”))
-app.run(host=“0.0.0.0”, port=port)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "10000"))
+    app.run(host="0.0.0.0", port=port)
