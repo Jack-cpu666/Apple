@@ -1,17 +1,50 @@
-import os, io, base64, json, mimetypes, time, re, tempfile
+import os, base64, json, mimetypes, time, re, tempfile
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 from flask import Flask, request, send_from_directory, make_response, jsonify, Response
 
-APP_TITLE = "All-in-One AI Chat (OpenAI • Claude • Gemini)"
-UPLOAD_DIR = os.environ.get("UPLOAD_DIR")
-if not UPLOAD_DIR:
-    UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "uploads")
-
+# ---------------------------
+# Config
+# ---------------------------
+APP_TITLE = "All-in-One AI Chat — OpenAI • Claude • Gemini"
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR") or os.path.join(tempfile.gettempdir(), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# API keys
+OPENAI_KEY_SERVER = os.environ.get("OPENAI_API_KEY_SERVER")
+ANTHROPIC_KEY_SERVER = os.environ.get("ANTHROPIC_API_KEY_SERVER")
+GEMINI_KEYS = [k for k in [os.environ.get("GEMINI_KEY_1"), os.environ.get("GEMINI_KEY_2")] if k]
+
+# Optional Google Custom Search
+GOOGLE_SEARCH_KEY = os.environ.get("GOOGLE_SEARCH_KEY")
+GOOGLE_SEARCH_CX  = os.environ.get("GOOGLE_SEARCH_CX")
+
+# Model lists are configurable via env; otherwise use solid defaults
+def split_models(s, fallback):
+    if s and s.strip():
+        return [x.strip() for x in s.split(",") if x.strip()]
+    return fallback
+
+DEFAULT_OPENAI_MODELS = [
+    # keep these broad & stable; override via OPENAI_MODELS for bleeding-edge
+    "o3", "o4-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4o"
+]
+DEFAULT_ANTHROPIC_MODELS = [
+    "claude-3.7-sonnet", "claude-3.7-haiku", "claude-3-opus"
+]
+DEFAULT_GOOGLE_MODELS = [
+    "gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.5-flash-8b"
+]
+
+OPENAI_MODELS    = split_models(os.environ.get("OPENAI_MODELS"),    DEFAULT_OPENAI_MODELS)
+ANTHROPIC_MODELS = split_models(os.environ.get("ANTHROPIC_MODELS"), DEFAULT_ANTHROPIC_MODELS)
+GOOGLE_MODELS    = split_models(os.environ.get("GOOGLE_MODELS"),    DEFAULT_GOOGLE_MODELS)
+
+# ---------------------------
+# Flask
+# ---------------------------
 app = Flask(__name__, static_folder=None)
 
 def cors(resp):
@@ -28,16 +61,9 @@ def _after(resp):
 def health():
     return "ok"
 
-def read_env(name, default=None):
-    v = os.environ.get(name, default)
-    return v if (v is not None and str(v).strip() != "") else None
-
-OPENAI_KEY_SERVER = read_env("OPENAI_API_KEY_SERVER")
-ANTHROPIC_KEY_SERVER = read_env("ANTHROPIC_API_KEY_SERVER")
-GEMINI_KEYS = [k for k in [read_env("GEMINI_KEY_1"), read_env("GEMINI_KEY_2")] if k]
-GOOGLE_SEARCH_KEY = read_env("GOOGLE_SEARCH_KEY")
-GOOGLE_SEARCH_CX  = read_env("GOOGLE_SEARCH_CX")
-
+# ---------------------------
+# Helpers
+# ---------------------------
 def http_json(method, url, headers=None, data=None, timeout=60):
     body = json.dumps(data).encode("utf-8") if data is not None else None
     req = Request(url, data=body, method=method.upper())
@@ -102,15 +128,6 @@ def build_search_context(results):
         lines.append(f"{i}. {r['title']}\n{r['snippet']}\n{r['link']}\n")
     return "\n".join(lines)
 
-_gemini_rr = 0
-def pick_gemini_key():
-    global _gemini_rr
-    if GEMINI_KEYS:
-        key = GEMINI_KEYS[_gemini_rr % len(GEMINI_KEYS)]
-        _gemini_rr += 1
-        return key
-    return None
-
 def normalize_messages_for_last_user_images(messages, attachments):
     msgs = list(messages)
     if attachments:
@@ -121,7 +138,11 @@ def normalize_messages_for_last_user_images(messages, attachments):
                 break
     return msgs
 
+# ---------------------------
+# Providers
+# ---------------------------
 def openai_chat(model, system_prompt, messages, key):
+    """Try Responses API first, fall back to Chat Completions."""
     api = "https://api.openai.com/v1/responses"
     headers = {"Authorization": f"Bearer {key}"}
 
@@ -143,8 +164,7 @@ def openai_chat(model, system_prompt, messages, key):
     for m in messages:
         role = m.get("role","user")
         if role == "user":
-            content = to_parts(m)
-            input_list.append({"role":"user","content":content})
+            input_list.append({"role":"user","content": to_parts(m)})
         elif role == "assistant":
             input_list.append({"role":"assistant","content":[{"type":"output_text","text": m.get("content","")}]})
         else:
@@ -155,6 +175,7 @@ def openai_chat(model, system_prompt, messages, key):
     if not err and data:
         if "output_text" in data and data["output_text"]:
             return data["output_text"], {"provider":"openai","model":model}, None
+        # Some responses use "output" blocks
         try:
             blocks = data.get("output", []) or data.get("response", {}).get("output", [])
             texts = []
@@ -167,7 +188,7 @@ def openai_chat(model, system_prompt, messages, key):
         except Exception:
             pass
 
-    # Fallback to chat.completions if /responses isn't available
+    # Fallback
     api2 = "https://api.openai.com/v1/chat/completions"
     msg_list = []
     if system_prompt and system_prompt.strip():
@@ -287,6 +308,29 @@ def gemini_chat(model, system_prompt, messages, key):
     except Exception:
         return json.dumps(data), {"provider":"gemini","model":model}, None
 
+# Gemini key round-robin
+_gemini_rr = 0
+def pick_gemini_key():
+    global _gemini_rr
+    if GEMINI_KEYS:
+        key = GEMINI_KEYS[_gemini_rr % len(GEMINI_KEYS)]
+        _gemini_rr += 1
+        return key
+    return None
+
+# ---------------------------
+# API Routes
+# ---------------------------
+@app.route("/api/models")
+def api_models():
+    """Return provider -> models map and a friendly label for UI."""
+    out = {
+        "openai":    [{"id": m, "label": m} for m in OPENAI_MODELS],
+        "anthropic": [{"id": m, "label": m} for m in ANTHROPIC_MODELS],
+        "google":    [{"id": m, "label": m} for m in GOOGLE_MODELS],
+    }
+    return jsonify(out)
+
 @app.route("/api/upload", methods=["POST", "OPTIONS"])
 def upload():
     if request.method == "OPTIONS":
@@ -322,6 +366,7 @@ def api_chat():
 
     messages = normalize_messages_for_last_user_images(messages, attachments)
 
+    # Optional: prepend Google search context from the last user turn
     if use_search and GOOGLE_SEARCH_KEY and GOOGLE_SEARCH_CX:
         last_user_text = ""
         for m in reversed(messages):
@@ -354,6 +399,7 @@ def api_chat():
             return jsonify({"error":"Unknown provider"}), 400
 
         if err:
+            # Try alternate Gemini key if available
             if provider == "google" and len(GEMINI_KEYS) > 1:
                 alt = GEMINI_KEYS[1] if GEMINI_KEYS[0] == key else GEMINI_KEYS[0]
                 out2, meta2, err2 = gemini_chat(model, system_prompt, messages, alt)
@@ -374,8 +420,10 @@ def api_search():
     res = google_search_top(q, n=5)
     return jsonify({"results": res})
 
+# ---------------------------
+# HTML (Mobile-first, polished)
+# ---------------------------
 HTML_TEMPLATE = """<!doctype html>
-
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
@@ -383,289 +431,139 @@ HTML_TEMPLATE = """<!doctype html>
 <title>{{APP_TITLE}}</title>
 <link rel="icon" href="data:,">
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  * { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
   :root {
     --primary: #6366f1;
-    --primary-dark: #4f46e5;
-    --secondary: #ec4899;
-    --accent: #8b5cf6;
-    --success: #10b981;
-    --warning: #f59e0b;
-    --danger: #ef4444;
-    --dark: #0f172a;
-    --darker: #020617;
-    --light: #f8fafc;
-    --muted: #64748b;
+    --surface: #0b1220;
+    --card: #0f172a;
+    --muted: #94a3b8;
   }
-  body { 
-    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-    color: #e2e8f0;
-    min-height: 100vh;
-  }
-  .glass {
-    background: rgba(30, 41, 59, 0.5);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-  }
-  .glass-dark {
-    background: rgba(15, 23, 42, 0.7);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-  }
-  .gradient-bg {
-    background: linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%);
-  }
-  .btn-primary {
-    background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
-    color: white;
-    transition: all 0.3s ease;
-    box-shadow: 0 4px 15px 0 rgba(99, 102, 241, 0.3);
-  }
-  .btn-primary:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px 0 rgba(99, 102, 241, 0.4);
-  }
-  .btn-secondary {
-    background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #e2e8f0;
-    transition: all 0.3s ease;
-  }
-  .btn-secondary:hover {
-    background: rgba(255, 255, 255, 0.05);
-    border-color: rgba(255, 255, 255, 0.2);
-  }
-  .bubble-user {
-    background: linear-gradient(135deg, rgba(99, 102, 241, 0.2) 0%, rgba(139, 92, 246, 0.2) 100%);
-    border: 1px solid rgba(99, 102, 241, 0.3);
-    border-radius: 20px 20px 4px 20px;
-  }
-  .bubble-assistant {
-    background: rgba(30, 41, 59, 0.5);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 20px 20px 20px 4px;
-  }
-  .model-card {
-    transition: all 0.3s ease;
-    cursor: pointer;
-  }
-  .model-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 10px 30px 0 rgba(0, 0, 0, 0.3);
-  }
-  .model-card.active {
-    border-color: var(--primary);
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
-  }
-  .chat-item {
-    transition: all 0.3s ease;
-    cursor: pointer;
-  }
-  .chat-item:hover {
-    background: rgba(255, 255, 255, 0.05);
-  }
-  .chat-item.active {
-    background: rgba(99, 102, 241, 0.1);
-    border-left: 3px solid var(--primary);
-  }
-  textarea {
-    resize: none;
-    scrollbar-width: thin;
-    scrollbar-color: #4b5563 transparent;
-  }
-  textarea::-webkit-scrollbar {
-    width: 6px;
-  }
-  textarea::-webkit-scrollbar-thumb {
-    background: #4b5563;
-    border-radius: 3px;
-  }
-  .scrollbar-thin {
-    scrollbar-width: thin;
-  }
-  .scrollbar-thin::-webkit-scrollbar {
-    width: 6px;
-  }
-  .scrollbar-thin::-webkit-scrollbar-thumb {
-    background: #4b5563;
-    border-radius: 3px;
-  }
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-  .fade-in {
-    animation: fadeIn 0.3s ease-out;
-  }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
-  }
-  .animate-pulse {
-    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  }
-  .file-chip {
-    background: rgba(99, 102, 241, 0.1);
-    border: 1px solid rgba(99, 102, 241, 0.3);
-    transition: all 0.3s ease;
-  }
-  .file-chip:hover {
-    background: rgba(99, 102, 241, 0.2);
-  }
-  @media (max-width: 768px) {
-    .mobile-menu {
-      transform: translateX(-100%);
-      transition: transform 0.3s ease;
-    }
-    .mobile-menu.active {
-      transform: translateX(0);
-    }
+  * { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  body { background: radial-gradient(1200px 800px at 10% 10%, rgba(99,102,241,.12), transparent 40%), #0b1220; color: #e5e7eb; }
+  .glass { background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.06); }
+  .btn { transition: .2s ease; }
+  .btn-primary { background: linear-gradient(135deg, #6366f1, #7c3aed); }
+  .btn-primary:hover { filter: brightness(1.05); transform: translateY(-1px); }
+  .btn-ghost { background: transparent; border: 1px solid rgba(255,255,255,0.1); }
+  .btn-ghost:hover { background: rgba(255,255,255,0.06); }
+  .bubble { border: 1px solid rgba(255,255,255,0.08); }
+  .bubble-user { background: linear-gradient(135deg, rgba(99,102,241,.18), rgba(124,58,237,.18)); border-radius: 18px 18px 4px 18px; }
+  .bubble-ai { background: rgba(255,255,255,0.04); border-radius: 18px 18px 18px 4px; }
+  .model-badge { font-size: 12px; padding: 4px 8px; border: 1px solid rgba(255,255,255,0.1); border-radius: 9999px; color: #c7d2fe; }
+  .input { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); }
+  .markdown { color: #e5e7eb; }
+  .markdown pre { background: rgba(0,0,0,0.5); padding: 12px; border-radius: 12px; overflow: auto; }
+  .markdown code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+  .chip { background: rgba(99,102,241,.15); border: 1px solid rgba(99,102,241,.35); }
+  @media (min-width:1024px){
+    #sidebar { position: sticky; top: 20px; height: calc(100vh - 40px); }
   }
 </style>
 </head>
 <body>
-  <div id="banner" class="gradient-bg text-white text-center py-3 px-4 relative">
-    <span class="text-sm font-medium">✨ Free for now! Soon $10/month for unlimited access to all AI models</span>
-    <button onclick="document.getElementById('banner').style.display='none'" class="absolute right-4 top-1/2 -translate-y-1/2 text-white/80 hover:text-white">
-      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-      </svg>
-    </button>
-  </div>
-
-  <div class="container mx-auto px-4 py-6 max-w-7xl">
-    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-      <button id="mobileMenuBtn" class="lg:hidden fixed top-6 left-4 z-50 p-3 glass rounded-xl">
-        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
-        </svg>
+  <!-- Top Bar (mobile-first) -->
+  <header class="sticky top-0 z-40 glass">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600"></div>
+        <div class="text-sm lg:text-base font-semibold">{{APP_TITLE}}</div>
+      </div>
+      <div class="hidden sm:flex items-center gap-2">
+        <span id="status" class="text-xs text-indigo-300/80">Ready</span>
+      </div>
+      <button id="menuBtn" class="sm:hidden btn btn-ghost px-3 py-2 rounded-lg">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h16"/></svg>
       </button>
+    </div>
+  </header>
 
-      <aside id="sidebar" class="lg:col-span-3 space-y-6 mobile-menu fixed lg:relative inset-y-0 left-0 z-40 w-80 lg:w-auto p-6 lg:p-0 glass-dark lg:bg-transparent">
-        <div class="glass rounded-2xl p-6">
-          <div class="flex items-center justify-between mb-4">
-            <h2 class="text-xl font-semibold">Conversations</h2>
-            <button id="newChat" class="btn-primary px-4 py-2 rounded-xl text-sm font-medium">
-              New Chat
-            </button>
+  <div class="max-w-7xl mx-auto px-3 sm:px-4 py-4 grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6">
+    <!-- Sidebar -->
+    <aside id="sidebar" class="lg:col-span-4 xl:col-span-3 space-y-4 sm:space-y-6 glass rounded-2xl p-4 sm:p-6 hidden sm:block">
+      <div class="space-y-4">
+        <div class="flex items-center justify-between">
+          <div class="text-base sm:text-lg font-semibold">Settings</div>
+          <button id="newChat" class="btn btn-ghost px-3 py-2 rounded-lg text-sm">New Chat</button>
+        </div>
+
+        <div>
+          <label class="text-xs text-slate-400">Provider</label>
+          <div class="grid grid-cols-3 mt-2 gap-2">
+            <button data-provider="openai" class="provider btn btn-ghost rounded-lg py-2">OpenAI</button>
+            <button data-provider="anthropic" class="provider btn btn-ghost rounded-lg py-2">Claude</button>
+            <button data-provider="google" class="provider btn btn-ghost rounded-lg py-2">Gemini</button>
           </div>
-          <div id="chatList" class="space-y-2 max-h-[40vh] overflow-y-auto scrollbar-thin pr-2"></div>
-          <div class="mt-4 flex flex-wrap gap-2">
-            <button id="exportChats" class="btn-secondary px-3 py-1.5 rounded-lg text-sm">Export</button>
-            <label class="btn-secondary px-3 py-1.5 rounded-lg text-sm cursor-pointer">
+        </div>
+
+        <div>
+          <label class="text-xs text-slate-400">Model</label>
+          <select id="model" class="input w-full mt-2 px-3 py-2 rounded-lg"></select>
+        </div>
+
+        <div class="flex items-center justify-between">
+          <label class="flex items-center gap-2 text-sm">
+            <input id="toggleSearch" type="checkbox" class="w-4 h-4">
+            Use Google Search
+          </label>
+          <span class="model-badge" id="providerTag">openai</span>
+        </div>
+
+        <div>
+          <label class="text-xs text-slate-400">System Prompt</label>
+          <textarea id="systemPrompt" rows="5" class="input w-full mt-2 px-3 py-2 rounded-lg" placeholder="Set custom behavior..."></textarea>
+          <div class="mt-2 flex items-center gap-2">
+            <button id="resetSystem" class="btn btn-ghost px-3 py-2 rounded-lg text-sm">Reset</button>
+          </div>
+        </div>
+
+        <div>
+          <div class="text-sm font-semibold mb-2">Conversations</div>
+          <div id="chatList" class="space-y-2 max-h-[35vh] overflow-y-auto pr-1"></div>
+          <div class="mt-3 flex gap-2">
+            <button id="exportChats" class="btn btn-ghost px-3 py-2 rounded-lg text-sm">Export</button>
+            <label class="btn btn-ghost px-3 py-2 rounded-lg text-sm cursor-pointer">
               Import<input type="file" id="importFile" class="hidden" accept=".json"/>
             </label>
-            <button id="clearChats" class="btn-secondary px-3 py-1.5 rounded-lg text-sm text-red-400 hover:text-red-300">Clear All</button>
+            <button id="clearChats" class="btn btn-ghost px-3 py-2 rounded-lg text-sm text-red-300">Clear</button>
           </div>
         </div>
+      </div>
+    </aside>
 
-        <div class="glass rounded-2xl p-6">
-          <h2 class="text-xl font-semibold mb-4">Select AI Model</h2>
-          <div class="grid grid-cols-1 gap-3">
-            <div class="model-card glass rounded-xl p-4" data-provider="openai">
-              <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-green-400 to-green-600 flex items-center justify-center text-white font-bold">O</div>
-                <div>
-                  <h3 class="font-semibold">OpenAI</h3>
-                  <p class="text-xs text-gray-400">GPT-4.1 & o3</p>
-                </div>
-              </div>
-            </div>
-            <div class="model-card glass rounded-xl p-4" data-provider="anthropic">
-              <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-400 to-orange-600 flex items-center justify-center text-white font-bold">C</div>
-                <div>
-                  <h3 class="font-semibold">Claude</h3>
-                  <p class="text-xs text-gray-400">Opus 4.1 & Sonnet 4</p>
-                </div>
-              </div>
-            </div>
-            <div class="model-card glass rounded-xl p-4" data-provider="google">
-              <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-bold">G</div>
-                <div>
-                  <h3 class="font-semibold">Gemini</h3>
-                  <p class="text-xs text-gray-400">1.5 Pro & Flash</p>
-                </div>
-              </div>
-            </div>
-          </div>
-          <select id="model" class="w-full mt-4 bg-transparent border border-gray-600 rounded-xl px-4 py-2.5 focus:border-primary focus:outline-none"></select>
-          <div class="mt-4 flex items-center gap-3">
-            <input id="toggleSearch" type="checkbox" class="w-4 h-4 rounded border-gray-600 text-primary focus:ring-primary focus:ring-offset-0"/>
-            <label for="toggleSearch" class="text-sm">Enable Google Search</label>
-          </div>
+    <!-- Chat -->
+    <main class="lg:col-span-8 xl:col-span-9">
+      <div id="chat" class="glass rounded-2xl p-3 sm:p-4 md:p-6 h-[70vh] sm:h-[72vh] overflow-y-auto"></div>
+
+      <!-- Composer -->
+      <div class="mt-3 sm:mt-4 glass rounded-2xl p-3 sm:p-4">
+        <div id="dropzone" class="border-2 border-dashed border-white/10 rounded-xl p-3 sm:p-4 text-center text-sm text-slate-400">
+          Drag & drop files here or
+          <label class="underline cursor-pointer">browse<input id="fileInput" type="file" class="hidden" multiple accept="image/*,.pdf,.txt,.md,.doc,.docx,.csv,.json,.xml"/></label>
         </div>
-
-        <div class="glass rounded-2xl p-6">
-          <h2 class="text-xl font-semibold mb-4">System Instructions</h2>
-          <textarea id="systemPrompt" rows="6" class="w-full bg-transparent border border-gray-600 rounded-xl px-4 py-3 text-sm focus:border-primary focus:outline-none scrollbar-thin" placeholder="Set custom instructions for the AI..."></textarea>
-          <button id="resetSystem" class="btn-secondary px-3 py-1.5 rounded-lg text-sm mt-3">Reset to Default</button>
+        <div id="fileChips" class="flex gap-2 flex-wrap mt-2"></div>
+        <div class="flex items-end gap-2 sm:gap-3 mt-3">
+          <textarea id="prompt" rows="3" class="input flex-1 px-3 py-3 rounded-xl" placeholder="Message the AI..."></textarea>
+          <button id="sendBtn" class="btn btn-primary px-4 sm:px-5 py-3 rounded-xl font-medium">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
+          </button>
         </div>
-      </aside>
-
-      <main class="lg:col-span-9 space-y-6">
-        <div id="chat" class="glass rounded-2xl p-6 h-[70vh] overflow-y-auto scrollbar-thin"></div>
-
-        <div class="glass rounded-2xl p-6">
-          <div class="flex items-start gap-4">
-            <div class="flex-1">
-              <textarea id="prompt" rows="3" placeholder="Type your message here..." class="w-full bg-transparent border border-gray-600 rounded-xl px-4 py-3 focus:border-primary focus:outline-none scrollbar-thin"></textarea>
-              <div class="flex items-center gap-3 mt-3">
-                <label class="btn-secondary px-4 py-2 rounded-xl text-sm cursor-pointer">
-                  <svg class="w-5 h-5 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
-                  </svg>
-                  Attach Files
-                  <input id="fileInput" type="file" class="hidden" multiple accept="image/*,.pdf,.txt,.md,.doc,.docx,.csv,.json,.xml"/>
-                </label>
-                <div id="fileChips" class="flex gap-2 flex-wrap"></div>
-              </div>
-            </div>
-            <button id="sendBtn" class="btn-primary px-6 py-3 rounded-xl font-medium">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
-              </svg>
-            </button>
-          </div>
-          <div class="flex items-center justify-between mt-4">
-            <span id="status" class="text-sm text-gray-400">Ready</span>
-            <span class="text-xs text-gray-500">Press Enter to send, Shift+Enter for new line</span>
-          </div>
+        <div class="flex items-center justify-between mt-2">
+          <span id="statusMobile" class="sm:hidden text-xs text-indigo-300/80">Ready</span>
+          <span class="hidden sm:inline text-xs text-slate-500">Enter to send • Shift+Enter newline</span>
         </div>
-      </main>
-    </div>
+      </div>
+    </main>
   </div>
 
 <script>
-const DEFAULT_SYSTEM = `You are a helpful, creative, and smart assistant. Follow the user's instructions carefully and provide detailed, accurate responses.`;
-
-const PRESETS = {
-  openai: [
-    { id:"o3", label:"o3 - Advanced Reasoning"},
-    { id:"o4-mini", label:"o4-mini - Fast Reasoning"},
-    { id:"gpt-4.1", label:"GPT-4.1 - Most Capable"},
-    { id:"gpt-4.1-mini", label:"GPT-4.1 Mini - Fast & Cheap"}
-  ],
-  anthropic: [
-    { id:"claude-opus-4-1-20250805", label:"Claude Opus 4.1 - Most Powerful"},
-    { id:"claude-sonnet-4-20250514", label:"Claude Sonnet 4 - Balanced"}
-  ],
-  google: [
-    { id:"gemini-1.5-pro", label:"Gemini 1.5 Pro - Advanced"},
-    { id:"gemini-1.5-flash", label:"Gemini 1.5 Flash - Fast"}
-  ]
-};
+const DEFAULT_SYSTEM = `You are a helpful, precise, and friendly assistant. Answer clearly, format with markdown when useful, and ask for missing details only when necessary.`;
 
 const $ = sel => document.querySelector(sel);
 const $$ = sel => Array.from(document.querySelectorAll(sel));
-
 const chatEl = $("#chat");
 const modelEl = $("#model");
 const toggleSearchEl = $("#toggleSearch");
@@ -681,11 +579,14 @@ const clearChatsEl = $("#clearChats");
 const exportChatsEl = $("#exportChats");
 const importFileEl = $("#importFile");
 const statusEl = $("#status");
-const mobileMenuBtn = $("#mobileMenuBtn");
+const statusMobileEl = $("#statusMobile");
+const menuBtn = $("#menuBtn");
 const sidebar = $("#sidebar");
+const providerTag = $("#providerTag");
 
 let filesToSend = [];
 let currentProvider = "openai";
+let MODELS = {openai:[], anthropic:[], google:[]};
 let state = {
   chats: [],
   activeId: null,
@@ -694,77 +595,96 @@ let state = {
 };
 
 function uid(){ return Math.random().toString(36).slice(2) + Date.now().toString(36); }
-
 function saveState(){
-  localStorage.setItem("chats_v3", JSON.stringify(state.chats));
+  localStorage.setItem("chats_v4", JSON.stringify(state.chats));
   localStorage.setItem("active_chat", state.activeId || "");
   localStorage.setItem("use_search", JSON.stringify(state.useSearch));
   localStorage.setItem("system_prompt", state.systemPrompt);
 }
-
 function loadState(){
-  try { state.chats = JSON.parse(localStorage.getItem("chats_v3") || "[]"); } catch { state.chats=[]; }
+  try { state.chats = JSON.parse(localStorage.getItem("chats_v4") || "[]"); } catch { state.chats=[]; }
   state.activeId = localStorage.getItem("active_chat") || (state.chats[0]?.id || null);
   renderChatList();
   if (!state.activeId) newChat();
   else renderActive();
 }
 
+function setStatus(msg, type="normal"){
+  const el1 = statusEl, el2 = statusMobileEl;
+  [el1, el2].forEach(el=>{
+    if(!el) return;
+    el.textContent = msg;
+    el.className = type==="loading" ? "text-xs text-yellow-300/90" :
+                   type==="error"   ? "text-xs text-red-300/90" :
+                                      "text-xs text-indigo-300/80";
+  });
+  if (type !== "loading"){
+    setTimeout(()=> setStatus("Ready","normal"), 2500);
+  }
+}
+
+async function fetchModels(){
+  try{
+    const res = await fetch("/api/models");
+    MODELS = await res.json();
+  }catch(e){
+    MODELS = {
+      openai:    [{id:"o3",label:"o3"}, {id:"gpt-4.1",label:"gpt-4.1"}],
+      anthropic: [{id:"claude-3.7-sonnet",label:"claude-3.7-sonnet"}],
+      google:    [{id:"gemini-1.5-pro",label:"gemini-1.5-pro"}]
+    };
+  }
+}
+
+function fillModelSelect(provider){
+  modelEl.innerHTML = "";
+  (MODELS[provider]||[]).forEach(m=>{
+    const opt = document.createElement("option");
+    opt.value = m.id; opt.textContent = m.label || m.id;
+    modelEl.appendChild(opt);
+  });
+}
+
 function newChat(){
   const id = uid();
-  const model = modelEl.value;
+  const model = modelEl.value || (MODELS[currentProvider]?.[0]?.id || "");
   const chat = { id, title: "New conversation", provider: currentProvider, model, messages: [] };
   state.chats.unshift(chat);
   state.activeId = id;
-  saveState();
-  renderChatList();
-  renderActive();
+  saveState(); renderChatList(); renderActive();
 }
 
 function renderChatList(){
   chatListEl.innerHTML = "";
   state.chats.forEach(ch => {
     const div = document.createElement("div");
-    div.className = "chat-item rounded-xl p-3 flex items-center justify-between";
-    if (ch.id === state.activeId) div.classList.add("active");
+    div.className = "flex items-center justify-between p-2 rounded-xl hover:bg-white/5 cursor-pointer";
+    if (ch.id === state.activeId) div.classList.add("bg-white/10");
     div.innerHTML = `
-      <div class="flex-1 truncate pr-2">${ch.title}</div>
+      <div class="flex-1 truncate text-sm">${ch.title}</div>
       <div class="flex gap-1">
-        <button class="p-1.5 hover:bg-white/10 rounded-lg rename">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
-          </svg>
+        <button class="p-1.5 hover:bg-white/10 rounded-lg rename" title="Rename">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
         </button>
-        <button class="p-1.5 hover:bg-white/10 rounded-lg del text-red-400">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-          </svg>
+        <button class="p-1.5 hover:bg-white/10 rounded-lg del text-red-300" title="Delete">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
         </button>
       </div>`;
     div.onclick = (e) => { 
       if (e.target.closest(".rename")||e.target.closest(".del")) return; 
-      state.activeId = ch.id; 
-      saveState(); 
-      renderActive();
-      if (window.innerWidth < 1024) sidebar.classList.remove("active");
+      state.activeId = ch.id; saveState(); renderActive();
     };
     div.querySelector(".rename").onclick = (e) => {
       e.stopPropagation();
       const t = prompt("Rename conversation", ch.title);
-      if (t) {
-        ch.title = t;
-        saveState(); 
-        renderChatList();
-      }
+      if (t) { ch.title = t; saveState(); renderChatList(); }
     };
     div.querySelector(".del").onclick = (e) => {
       e.stopPropagation();
       if (!confirm("Delete this conversation?")) return;
       state.chats = state.chats.filter(c => c.id !== ch.id);
       if (state.activeId === ch.id) state.activeId = state.chats[0]?.id || null;
-      saveState(); 
-      renderChatList(); 
-      renderActive();
+      saveState(); renderChatList(); renderActive();
     };
     chatListEl.appendChild(div);
   });
@@ -774,49 +694,45 @@ function renderActive(){
   const ch = state.chats.find(c => c.id === state.activeId);
   if (!ch) return;
   currentProvider = ch.provider || "openai";
-  updateModelSelection();
+  providerTag.textContent = currentProvider;
+  fillModelSelect(currentProvider);
   modelEl.value = ch.model || modelEl.value;
   chatEl.innerHTML = "";
   ch.messages.forEach(m => addBubble(m.role, m.content, m.attachments || []));
-  scrollToBottom();
+  chatEl.scrollTop = chatEl.scrollHeight;
 }
 
-function updateModelSelection(){
-  $$(".model-card").forEach(card => {
-    card.classList.toggle("active", card.dataset.provider === currentProvider);
-  });
-  modelEl.innerHTML = "";
-  PRESETS[currentProvider].forEach(m => {
-    const opt = document.createElement("option");
-    opt.value = m.id;
-    opt.textContent = m.label;
-    modelEl.appendChild(opt);
+function setProvidersUI(){
+  $$(".provider").forEach(btn=>{
+    btn.classList.toggle("bg-white/10", btn.dataset.provider===currentProvider);
+    btn.onclick = ()=>{
+      currentProvider = btn.dataset.provider;
+      const ch = state.chats.find(c => c.id === state.activeId);
+      if (ch){ ch.provider = currentProvider; ch.model = ""; saveState(); }
+      providerTag.textContent = currentProvider;
+      fillModelSelect(currentProvider);
+      const first = MODELS[currentProvider]?.[0]?.id || "";
+      modelEl.value = first;
+    };
   });
 }
-
-$$(".model-card").forEach(card => {
-  card.onclick = () => {
-    currentProvider = card.dataset.provider;
-    updateModelSelection();
-    const ch = state.chats.find(c => c.id === state.activeId);
-    if (ch) {
-      ch.provider = currentProvider;
-      ch.model = modelEl.value;
-      saveState();
-    }
-  };
-});
 
 function addBubble(role, text, atts=[]){
-  const div = document.createElement("div");
-  div.className = "mb-4 fade-in flex " + (role==="user" ? "justify-end" : "justify-start");
+  const wrap = document.createElement("div");
+  wrap.className = "mb-3 flex " + (role==="user" ? "justify-end" : "justify-start");
+
   const bubble = document.createElement("div");
-  bubble.className = "max-w-[80%] " + (role==="user"?"bubble-user":"bubble-assistant") + " p-4";
+  bubble.className = "bubble " + (role==="user" ? "bubble-user" : "bubble-ai") + " rounded-2xl p-3 sm:p-4 max-w-[90%] sm:max-w-[80%]";
   
+  const who = document.createElement("div");
+  who.className = "text-[10px] uppercase tracking-wide text-slate-400 mb-1";
+  who.textContent = role === "user" ? "You" : "Assistant";
+  bubble.appendChild(who);
+
   if (text) {
     const textDiv = document.createElement("div");
-    textDiv.className = "whitespace-pre-wrap";
-    textDiv.textContent = text;
+    textDiv.className = "markdown text-sm leading-relaxed";
+    textDiv.innerHTML = marked.parse(text);
     bubble.appendChild(textDiv);
   }
   
@@ -836,15 +752,14 @@ function addBubble(role, text, atts=[]){
         link.href = a.url;
         link.textContent = a.name || a.url;
         link.target = "_blank";
-        link.className = "file-chip rounded-lg p-3 text-sm hover:bg-white/10 transition-colors";
+        link.className = "chip rounded-lg px-3 py-1.5 text-xs hover:bg-white/10 transition-colors";
         grid.appendChild(link);
       }
     });
     bubble.appendChild(grid);
   }
-  
-  div.appendChild(bubble);
-  chatEl.appendChild(div);
+  wrap.appendChild(bubble);
+  chatEl.appendChild(wrap);
 }
 
 function scrollToBottom(){
@@ -852,101 +767,88 @@ function scrollToBottom(){
 }
 
 promptEl.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    sendBtn.click();
-  }
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendBtn.click(); }
 });
 
+// Mobile menu
+menuBtn?.addEventListener("click", ()=>{
+  const visible = sidebar.classList.contains("block");
+  sidebar.classList.toggle("block", !visible);
+  sidebar.classList.toggle("hidden", visible);
+});
+
+// Toggle search & system prompt persistence
 toggleSearchEl.checked = state.useSearch;
-toggleSearchEl.addEventListener("change", () => {
-  state.useSearch = toggleSearchEl.checked;
-  saveState();
-});
-
+toggleSearchEl.addEventListener("change", () => { state.useSearch = toggleSearchEl.checked; saveState(); });
 systemPromptEl.value = state.systemPrompt;
-systemPromptEl.addEventListener("input", () => { 
-  state.systemPrompt = systemPromptEl.value; 
-  saveState(); 
-});
+systemPromptEl.addEventListener("input", () => { state.systemPrompt = systemPromptEl.value; saveState(); });
+resetSystemEl.onclick = () => { systemPromptEl.value = DEFAULT_SYSTEM; state.systemPrompt = DEFAULT_SYSTEM; saveState(); };
 
-resetSystemEl.onclick = () => {
-  systemPromptEl.value = DEFAULT_SYSTEM;
-  state.systemPrompt = DEFAULT_SYSTEM;
-  saveState();
-};
-
-newChatEl.onclick = newChat;
-clearChatsEl.onclick = () => {
+// Chats
+newChatEl?.addEventListener("click", newChat);
+clearChatsEl?.addEventListener("click", ()=>{
   if (!confirm("Delete all conversations?")) return;
-  state.chats = [];
-  state.activeId = null;
-  saveState();
-  newChat();
-};
-
-exportChatsEl.onclick = () => {
+  state.chats = []; state.activeId = null; saveState(); newChat();
+});
+exportChatsEl?.addEventListener("click", ()=>{
   const blob = new Blob([JSON.stringify(state.chats, null, 2)], {type:"application/json"});
   const u = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = u;
-  a.download = "ai-chats.json";
-  a.click();
-  URL.revokeObjectURL(u);
-};
-
-importFileEl.onchange = (e) => {
-  const f = e.target.files[0];
-  if(!f) return;
+  const a = document.createElement("a"); a.href = u; a.download = "ai-chats.json"; a.click(); URL.revokeObjectURL(u);
+});
+importFileEl?.addEventListener("change", (e)=>{
+  const f = e.target.files[0]; if(!f) return;
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = ()=>{
     try {
       const arr = JSON.parse(reader.result);
-      if (Array.isArray(arr)) {
-        state.chats = arr.concat(state.chats);
-        saveState();
-        renderChatList();
-        renderActive();
-        setStatus("Conversations imported", "success");
-      } else setStatus("Invalid file format", "error");
-    } catch { 
-      setStatus("Invalid JSON file", "error"); 
-    }
+      if (Array.isArray(arr)) { state.chats = arr.concat(state.chats); saveState(); renderChatList(); renderActive(); setStatus("Conversations imported","normal"); }
+      else setStatus("Invalid file format","error");
+    } catch { setStatus("Invalid JSON file","error"); }
   };
   reader.readAsText(f);
-};
+});
 
-fileInput.onchange = async (e) => {
+// File uploads (click + drag/drop)
+fileInput.addEventListener("change", async ()=>{
   if (!fileInput.files.length) return;
+  await uploadFiles(fileInput.files);
+  fileInput.value = "";
+});
+
+const dropzone = document.getElementById("dropzone");
+dropzone.addEventListener("dragover", e => { e.preventDefault(); dropzone.classList.add("ring-2","ring-indigo-400/50"); });
+dropzone.addEventListener("dragleave", e => { dropzone.classList.remove("ring-2","ring-indigo-400/50"); });
+dropzone.addEventListener("drop", async e => {
+  e.preventDefault();
+  dropzone.classList.remove("ring-2","ring-indigo-400/50");
+  if (e.dataTransfer.files?.length) await uploadFiles(e.dataTransfer.files);
+});
+
+async function uploadFiles(fileList){
   const fd = new FormData();
-  for (const f of fileInput.files) fd.append("files", f);
-  setStatus("Uploading files...", "loading");
+  for (const f of fileList) fd.append("files", f);
+  setStatus("Uploading files...","loading");
   try {
     const res = await fetch("/api/upload", { method:"POST", body: fd });
     const data = await res.json();
     (data.files||[]).forEach(f => {
       filesToSend.push(f);
       const chip = document.createElement("div");
-      chip.className = "file-chip rounded-lg px-3 py-1.5 flex items-center gap-2 text-sm";
-      chip.innerHTML = `
-        <span class="truncate max-w-[150px]">${f.name || f.url}</span>
-        <button class="text-gray-400 hover:text-white">×</button>`;
+      chip.className = "chip rounded-lg px-3 py-1.5 flex items-center gap-2 text-xs";
+      chip.innerHTML = `<span class="truncate max-w-[150px]">${f.name || f.url}</span><button class="opacity-70 hover:opacity-100">×</button>`;
       chip.querySelector("button").onclick = () => {
         filesToSend = filesToSend.filter(x => x.url !== f.url);
         chip.remove();
       };
       fileChips.appendChild(chip);
     });
-    setStatus("Files uploaded", "success");
+    setStatus("Files uploaded","normal");
   } catch(e) {
-    console.error(e);
-    setStatus("Upload failed", "error");
-  } finally {
-    fileInput.value = "";
+    console.error(e); setStatus("Upload failed","error");
   }
-};
+}
 
-sendBtn.onclick = async () => {
+sendBtn.addEventListener("click", async ()=>{
   const txt = promptEl.value.trim();
   const ch = state.chats.find(c => c.id === state.activeId);
   if (!ch) return;
@@ -960,19 +862,14 @@ sendBtn.onclick = async () => {
 
   const atts = filesToSend.slice();
   ch.messages.push({role:"user", content: txt, attachments: atts});
-  
   if (ch.messages.length === 1 && txt) {
-    ch.title = txt.slice(0, 50) + (txt.length > 50 ? "..." : "");
+    ch.title = txt.slice(0, 60) + (txt.length > 60 ? "..." : "");
     renderChatList();
   }
-  
-  filesToSend = [];
-  fileChips.innerHTML = "";
-  promptEl.value = "";
-  addBubble("user", txt, atts);
-  scrollToBottom();
+  filesToSend = []; fileChips.innerHTML = ""; promptEl.value = "";
+  addBubble("user", txt, atts); scrollToBottom();
 
-  setStatus("AI is thinking...", "loading");
+  setStatus("Thinking...","loading");
   try {
     const res = await fetch("/api/chat", {
       method:"POST",
@@ -987,61 +884,28 @@ sendBtn.onclick = async () => {
       })
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Request failed");
+    if (!res.ok) throw new Error(typeof data.error==="string" ? data.error : (data.error?.error || "Request failed"));
     const out = (data.output || "").trim();
     ch.messages.push({role:"assistant", content: out});
     saveState();
     addBubble("assistant", out);
     scrollToBottom();
-    setStatus("Ready");
+    setStatus("Ready","normal");
   } catch(err) {
     console.error(err);
     addBubble("assistant", "⚠️ " + (err.message || "Something went wrong. Please try again."));
-    setStatus("Error occurred", "error");
-  }
-};
-
-function setStatus(msg, type = "normal"){
-  statusEl.textContent = msg;
-  statusEl.className = "text-sm ";
-  if (type === "loading") statusEl.className += "text-yellow-400 animate-pulse";
-  else if (type === "error") statusEl.className += "text-red-400";
-  else if (type === "success") statusEl.className += "text-green-400";
-  else statusEl.className += "text-gray-400";
-  
-  if (type !== "loading") {
-    setTimeout(() => {
-      statusEl.textContent = "Ready";
-      statusEl.className = "text-sm text-gray-400";
-    }, 3000);
-  }
-}
-
-mobileMenuBtn.onclick = () => {
-  sidebar.classList.toggle("active");
-};
-
-document.addEventListener("click", (e) => {
-  if (window.innerWidth < 1024 && !sidebar.contains(e.target) && !mobileMenuBtn.contains(e.target)) {
-    sidebar.classList.remove("active");
+    setStatus("Error","error");
   }
 });
 
-function addOption(select, value, label){
-  const o = document.createElement("option");
-  o.value = value; o.textContent = label; select.appendChild(o);
-}
-
-function initModelSelect(){
-  const provider = "openai";
-  const presets = PRESETS[provider];
-  modelEl.innerHTML = "";
-  presets.forEach(m => addOption(modelEl, m.id, m.label));
-}
-
-initModelSelect();
+// init
+(async ()=>{
+  await fetchModels();
+  fillModelSelect("openai");
+  setProvidersUI();
+  loadState();
+})();
 </script>
-
 </body>
 </html>"""
 
