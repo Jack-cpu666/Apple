@@ -28,14 +28,14 @@ def split_models(s, fallback):
     return fallback
 
 DEFAULT_OPENAI_MODELS = [
-    # keep these broad & stable; override via OPENAI_MODELS for bleeding-edge
     "o3", "o4-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4o"
 ]
 DEFAULT_ANTHROPIC_MODELS = [
     "claude-3.7-sonnet", "claude-3.7-haiku", "claude-3-opus"
 ]
+# Prefer 2.5 Pro first; env var can override
 DEFAULT_GOOGLE_MODELS = [
-    "gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.5-flash-8b"
+    "gemini-2.5-pro", "gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.5-flash-8b"
 ]
 
 OPENAI_MODELS    = split_models(os.environ.get("OPENAI_MODELS"),    DEFAULT_OPENAI_MODELS)
@@ -138,6 +138,24 @@ def normalize_messages_for_last_user_images(messages, attachments):
                 break
     return msgs
 
+# Identify Gemini rate-limit/quota errors to trigger failover
+def is_gemini_quota_error(err):
+    try:
+        if isinstance(err, dict):
+            e = err.get("error") or err
+            status = e.get("status")
+            code = e.get("code")
+            if status == "RESOURCE_EXHAUSTED" or code == 429:
+                return True
+            # Sometimes error is a string inside dict
+            s = json.dumps(err)
+            return "RESOURCE_EXHAUSTED" in s or '"code": 429' in s
+        if isinstance(err, str):
+            return "RESOURCE_EXHAUSTED" in err or '"code": 429' in err
+    except Exception:
+        pass
+    return False
+
 # ---------------------------
 # Providers
 # ---------------------------
@@ -175,7 +193,6 @@ def openai_chat(model, system_prompt, messages, key):
     if not err and data:
         if "output_text" in data and data["output_text"]:
             return data["output_text"], {"provider":"openai","model":model}, None
-        # Some responses use "output" blocks
         try:
             blocks = data.get("output", []) or data.get("response", {}).get("output", [])
             texts = []
@@ -385,29 +402,50 @@ def api_chat():
             if not key:
                 return jsonify({"error":"OpenAI API key not configured on server"}), 400
             out, meta, err = openai_chat(model, system_prompt, messages, key)
+            if err:
+                return jsonify({"error": err}), 502
+            return jsonify({"output": out, "meta": meta})
+
         elif provider == "anthropic":
             key = ANTHROPIC_KEY_SERVER
             if not key:
                 return jsonify({"error":"Anthropic API key not configured on server"}), 400
             out, meta, err = anthropic_chat(model, system_prompt, messages, key)
+            if err:
+                return jsonify({"error": err}), 502
+            return jsonify({"output": out, "meta": meta})
+
         elif provider == "google":
-            key = pick_gemini_key()
-            if not key:
+            # --- Gemini failover: models then keys ---
+            if not GEMINI_KEYS:
                 return jsonify({"error":"Gemini API key not configured on server"}), 400
-            out, meta, err = gemini_chat(model, system_prompt, messages, key)
+
+            # Model preference: requested first, then configured list
+            model_candidates = [m for m in ([model] if model else []) if m]
+            model_candidates += [m for m in GOOGLE_MODELS if m not in model_candidates]
+
+            # Start key order from next RR pick, then wrap
+            start_idx = globals().get("_gemini_rr", 0) % len(GEMINI_KEYS)
+            key_order = GEMINI_KEYS[start_idx:] + GEMINI_KEYS[:start_idx]
+
+            last_err = None
+            for m_candidate in model_candidates:
+                for k in key_order:
+                    out, meta, err = gemini_chat(m_candidate, system_prompt, messages, k)
+                    if not err and out:
+                        meta = meta or {}
+                        meta["model_used"] = m_candidate
+                        meta["key_index"] = key_order.index(k)
+                        return jsonify({"output": out, "meta": meta})
+                    # non-quota error? bubble up
+                    if err and not is_gemini_quota_error(err):
+                        return jsonify({"error": err}), 502
+                    last_err = err  # quota error; try next key/model
+            return jsonify({"error": last_err}), 502
+
         else:
             return jsonify({"error":"Unknown provider"}), 400
 
-        if err:
-            # Try alternate Gemini key if available
-            if provider == "google" and len(GEMINI_KEYS) > 1:
-                alt = GEMINI_KEYS[1] if GEMINI_KEYS[0] == key else GEMINI_KEYS[0]
-                out2, meta2, err2 = gemini_chat(model, system_prompt, messages, alt)
-                if not err2:
-                    return jsonify({"output": out2, "meta": meta2})
-            return jsonify({"error": err}), 502
-
-        return jsonify({"output": out, "meta": meta})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -631,7 +669,7 @@ async function fetchModels(){
     MODELS = {
       openai:    [{id:"o3",label:"o3"}, {id:"gpt-4.1",label:"gpt-4.1"}],
       anthropic: [{id:"claude-3.7-sonnet",label:"claude-3.7-sonnet"}],
-      google:    [{id:"gemini-1.5-pro",label:"gemini-1.5-pro"}]
+      google:    [{id:"gemini-2.5-pro",label:"gemini-2.5-pro"}]
     };
   }
 }
