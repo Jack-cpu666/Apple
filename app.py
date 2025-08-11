@@ -1,20 +1,4 @@
-# app.py
-# Single-file Flask app with inline HTML/JS/CSS.
-# Start Command (Render):
-#   gunicorn app:app
-# or
-#   python app.py
-#
-# Environment Variables (Render → Environment):
-#   PRO_PASSWORD
-#   OPENAI_API_KEY_SERVER
-#   ANTHROPIC_API_KEY_SERVER
-#   GEMINI_KEY_1
-#   GEMINI_KEY_2
-#   GOOGLE_SEARCH_KEY (optional, enables Search tool)
-#   GOOGLE_SEARCH_CX  (optional, enables Search tool)
-
-import os, io, base64, json, mimetypes, time, re
+import os, io, base64, json, mimetypes, time, re, tempfile
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
@@ -22,16 +6,13 @@ from urllib.error import HTTPError, URLError
 from flask import Flask, request, send_from_directory, make_response, jsonify, Response
 
 APP_TITLE = "All-in-One AI Chat (OpenAI • Claude • Gemini)"
-UPLOAD_DIR = os.environ.get("UPLOAD_DIR")  # set this to your disk mount path if you add a Persistent Disk
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR")
 if not UPLOAD_DIR:
-    # /tmp is always writable on Render (ephemeral: cleared on restarts)
     UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "uploads")
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = Flask(__name__, static_folder=None)
-
-# ---------------- CORS & utils
 
 def cors(resp):
     resp.headers["Access-Control-Allow-Origin"] = "*"
@@ -94,8 +75,6 @@ def guess_mime(name_or_bytes):
     mt, _ = mimetypes.guess_type(str(name_or_bytes))
     return mt or "application/octet-stream"
 
-# ---------------- Google Search (Programmable Search)
-
 def google_search_top(q, n=3):
     if not (GOOGLE_SEARCH_KEY and GOOGLE_SEARCH_CX):
         return []
@@ -123,8 +102,6 @@ def build_search_context(results):
     for i, r in enumerate(results, 1):
         lines.append(f"{i}. {r['title']}\n{r['snippet']}\n{r['link']}\n")
     return "\n".join(lines)
-
-# ---------------- Key picking
 
 def pick_openai_key(user_key, pro_password):
     if user_key: return user_key
@@ -157,8 +134,6 @@ def normalize_messages_for_last_user_images(messages, attachments):
                 extras.extend(attachments)
                 break
     return msgs
-
-# ---------------- OpenAI (Responses API → fallback chat.completions)
 
 def openai_chat(model, system_prompt, messages, key):
     api = "https://api.openai.com/v1/responses"
@@ -206,7 +181,6 @@ def openai_chat(model, system_prompt, messages, key):
         except Exception:
             pass
 
-    # fallback
     api2 = "https://api.openai.com/v1/chat/completions"
     msg_list = []
     if system_prompt and system_prompt.strip():
@@ -233,8 +207,6 @@ def openai_chat(model, system_prompt, messages, key):
     except Exception:
         txt = json.dumps(data2)
     return txt, {"provider":"openai","model":model}, None
-
-# ---------------- Anthropic (Claude 4: Opus 4.1, Sonnet 4)
 
 def anthropic_chat(model, system_prompt, messages, key):
     api = "https://api.anthropic.com/v1/messages"
@@ -284,8 +256,6 @@ def anthropic_chat(model, system_prompt, messages, key):
     except Exception:
         return json.dumps(data), {"provider":"anthropic","model":model}, None
 
-# ---------------- Gemini (1.5 Pro/Flash)
-
 def gemini_chat(model, system_prompt, messages, key):
     base = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
 
@@ -325,8 +295,6 @@ def gemini_chat(model, system_prompt, messages, key):
     except Exception:
         return json.dumps(data), {"provider":"gemini","model":model}, None
 
-# ---------------- Uploads
-
 @app.route("/api/upload", methods=["POST", "OPTIONS"])
 def upload():
     if request.method == "OPTIONS":
@@ -347,8 +315,6 @@ def upload():
 @app.route("/uploads/<path:fname>")
 def serve_upload(fname):
     return send_from_directory(UPLOAD_DIR, fname, as_attachment=False)
-
-# ---------------- Chat API
 
 @app.route("/api/chat", methods=["POST", "OPTIONS"])
 def api_chat():
@@ -402,7 +368,6 @@ def api_chat():
             return jsonify({"error":"Unknown provider"}), 400
 
         if err:
-            # Gemini fallback to other server key if available
             if provider == "google" and not gemini_key_user and len(GEMINI_KEYS) > 1:
                 alt = GEMINI_KEYS[1] if GEMINI_KEYS[0] == key else GEMINI_KEYS[0]
                 out2, meta2, err2 = gemini_chat(model, system_prompt, messages, alt)
@@ -423,8 +388,6 @@ def api_search():
     res = google_search_top(q, n=5)
     return jsonify({"results": res})
 
-# ---------------- Inline HTML (no f-string!)
-
 HTML_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -434,114 +397,466 @@ HTML_TEMPLATE = """<!doctype html>
 <link rel="icon" href="data:,">
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
+  @keyframes gradient {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-20px); }
+  }
+  @keyframes pulse-glow {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.8; transform: scale(1.05); }
+  }
+  @keyframes slide-up {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  
   :root {
-    --panel:#0f172a; --ink:#e5e7eb; --ink-dim:#cbd5e1; --accent:#8b5cf6; --chip:#1f2937;
+    --bg-primary: #0a0118;
+    --bg-secondary: #1a0f2e;
+    --panel: rgba(26, 15, 46, 0.4);
+    --ink: #f0e6ff;
+    --ink-dim: #b794f4;
+    --accent: #9f7aea;
+    --accent-bright: #b794f4;
+    --chip: rgba(159, 122, 234, 0.2);
+    --border: rgba(159, 122, 234, 0.3);
+    --glow: rgba(159, 122, 234, 0.5);
   }
-  body { background: #0b1020; color: var(--ink); }
-  .glass { backdrop-filter: blur(10px); background: rgba(15, 23, 42, 0.65); }
-  .card { border:1px solid rgba(255,255,255,0.08); }
-  .scrollbar::-webkit-scrollbar { width:8px; height:8px; }
-  .scrollbar::-webkit-scrollbar-thumb { background:#243047; border-radius:6px; }
+  
+  * {
+    box-sizing: border-box;
+  }
+  
+  body {
+    background: var(--bg-primary);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    overflow-x: hidden;
+    position: relative;
+  }
+  
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: 
+      radial-gradient(circle at 20% 50%, rgba(159, 122, 234, 0.15) 0%, transparent 50%),
+      radial-gradient(circle at 80% 80%, rgba(183, 148, 244, 0.1) 0%, transparent 50%),
+      radial-gradient(circle at 40% 20%, rgba(139, 92, 246, 0.1) 0%, transparent 50%);
+    pointer-events: none;
+    z-index: 1;
+  }
+  
+  .floating-orb {
+    position: fixed;
+    width: 300px;
+    height: 300px;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: 0.3;
+    pointer-events: none;
+    animation: float 20s ease-in-out infinite;
+    z-index: 0;
+  }
+  
+  .orb-1 {
+    background: linear-gradient(135deg, #9f7aea, #805ad5);
+    top: -150px;
+    left: -150px;
+    animation-delay: 0s;
+  }
+  
+  .orb-2 {
+    background: linear-gradient(135deg, #b794f4, #9f7aea);
+    bottom: -150px;
+    right: -150px;
+    animation-delay: 10s;
+  }
+  
+  .orb-3 {
+    background: linear-gradient(135deg, #805ad5, #6b46c1);
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    animation-delay: 5s;
+  }
+  
+  .glass {
+    backdrop-filter: blur(20px) saturate(180%);
+    background: rgba(26, 15, 46, 0.6);
+    border: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+  
+  .glass::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(159, 122, 234, 0.1), transparent);
+    animation: shimmer 3s infinite;
+  }
+  
+  .card {
+    box-shadow: 
+      0 0 30px rgba(159, 122, 234, 0.2),
+      0 10px 40px rgba(0, 0, 0, 0.3),
+      inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    transition: all 0.3s ease;
+    position: relative;
+    z-index: 2;
+  }
+  
+  .card:hover {
+    box-shadow: 
+      0 0 40px rgba(159, 122, 234, 0.3),
+      0 15px 50px rgba(0, 0, 0, 0.4),
+      inset 0 1px 0 rgba(255, 255, 255, 0.15);
+    transform: translateY(-2px);
+  }
+  
+  .scrollbar::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  
+  .scrollbar::-webkit-scrollbar-track {
+    background: rgba(26, 15, 46, 0.4);
+    border-radius: 10px;
+  }
+  
+  .scrollbar::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, var(--accent), var(--accent-bright));
+    border-radius: 10px;
+    border: 2px solid rgba(26, 15, 46, 0.4);
+  }
+  
+  .scrollbar::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, var(--accent-bright), var(--accent));
+  }
+  
   .bubble-user {
-    background: linear-gradient(180deg, rgba(139,92,246,.2), rgba(99,102,241,.2));
-    border:1px solid rgba(139,92,246,.35);
+    background: linear-gradient(135deg, rgba(159, 122, 234, 0.3), rgba(139, 92, 246, 0.25));
+    border: 1px solid rgba(183, 148, 244, 0.4);
+    box-shadow: 
+      0 5px 20px rgba(159, 122, 234, 0.2),
+      inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    animation: slide-up 0.3s ease;
   }
+  
   .bubble-assistant {
-    background: rgba(2,6,23,.6);
-    border:1px solid rgba(255,255,255,.08);
+    background: linear-gradient(135deg, rgba(26, 15, 46, 0.8), rgba(44, 25, 84, 0.6));
+    border: 1px solid rgba(159, 122, 234, 0.25);
+    box-shadow: 
+      0 5px 20px rgba(0, 0, 0, 0.3),
+      inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    animation: slide-up 0.3s ease;
   }
-  #composer-wrapper { position: sticky; bottom: 0; left: 0; right: 0; }
-  #chat { scroll-padding-bottom: 1rem; }
-  textarea { resize: none; line-height:1.5; }
+  
+  #composer-wrapper {
+    position: sticky;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 10;
+    background: linear-gradient(to top, var(--bg-primary), transparent);
+    padding-top: 20px;
+  }
+  
+  #chat {
+    scroll-padding-bottom: 1rem;
+  }
+  
+  textarea {
+    resize: none;
+    line-height: 1.5;
+    background: rgba(26, 15, 46, 0.5);
+    border: 1px solid var(--border);
+    color: var(--ink);
+    transition: all 0.3s ease;
+  }
+  
+  textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 20px rgba(159, 122, 234, 0.3);
+    background: rgba(26, 15, 46, 0.7);
+  }
+  
   .btn {
-    background: linear-gradient(180deg, rgba(139,92,246,.7), rgba(99,102,241,.7));
-    border:1px solid rgba(139,92,246,.5);
+    background: linear-gradient(135deg, var(--accent), var(--accent-bright));
+    border: 1px solid var(--accent-bright);
+    color: white;
+    font-weight: 600;
+    transition: all 0.3s ease;
+    box-shadow: 
+      0 4px 15px rgba(159, 122, 234, 0.4),
+      inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    position: relative;
+    overflow: hidden;
   }
-  .btn:hover { filter: brightness(1.1); }
-  .tag { background: var(--chip); border:1px solid rgba(255,255,255,.08); }
-  .pill { border:1px solid rgba(255,255,255,.08); }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+  
+  .btn::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    transition: width 0.6s, height 0.6s;
+  }
+  
+  .btn:hover::before {
+    width: 300px;
+    height: 300px;
+  }
+  
+  .btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 
+      0 6px 20px rgba(159, 122, 234, 0.5),
+      inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  }
+  
+  .btn:active {
+    transform: translateY(0);
+  }
+  
+  .tag {
+    background: var(--chip);
+    border: 1px solid var(--border);
+    color: var(--accent-bright);
+    transition: all 0.3s ease;
+  }
+  
+  .tag:hover {
+    background: rgba(159, 122, 234, 0.3);
+    box-shadow: 0 0 10px rgba(159, 122, 234, 0.3);
+  }
+  
+  .pill {
+    background: rgba(26, 15, 46, 0.6);
+    border: 1px solid var(--border);
+    color: var(--ink-dim);
+    transition: all 0.3s ease;
+    font-weight: 500;
+  }
+  
+  .pill:hover {
+    background: rgba(159, 122, 234, 0.2);
+    border-color: var(--accent);
+    color: var(--ink);
+    box-shadow: 0 0 15px rgba(159, 122, 234, 0.3);
+  }
+  
+  .mono {
+    font-family: 'Fira Code', 'SF Mono', Monaco, 'Inconsolata', 'Fira Mono', monospace;
+    font-size: 0.9em;
+  }
+  
+  input[type="text"], input[type="password"], select {
+    background: rgba(26, 15, 46, 0.5);
+    border: 1px solid var(--border);
+    color: var(--ink);
+    transition: all 0.3s ease;
+  }
+  
+  input[type="text"]:focus, input[type="password"]:focus, select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 20px rgba(159, 122, 234, 0.3);
+    background: rgba(26, 15, 46, 0.7);
+  }
+  
+  .chat-item {
+    transition: all 0.3s ease;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+  }
+  
+  .chat-item::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(159, 122, 234, 0.2), transparent);
+    transition: left 0.5s;
+  }
+  
+  .chat-item:hover::before {
+    left: 100%;
+  }
+  
+  .chat-item:hover {
+    background: rgba(159, 122, 234, 0.1);
+    border-color: var(--accent);
+  }
+  
+  .loading-dots {
+    display: inline-flex;
+    gap: 4px;
+  }
+  
+  .loading-dots span {
+    width: 8px;
+    height: 8px;
+    background: var(--accent);
+    border-radius: 50%;
+    animation: pulse-glow 1.4s ease-in-out infinite;
+  }
+  
+  .loading-dots span:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+  
+  .loading-dots span:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+  
+  .gradient-text {
+    background: linear-gradient(135deg, var(--accent), var(--accent-bright), var(--ink));
+    background-size: 200% 200%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: gradient 3s ease infinite;
+  }
+  
+  .status-ready {
+    color: #68d391;
+    border-color: #68d391;
+    background: rgba(104, 211, 145, 0.1);
+  }
+  
+  .status-busy {
+    color: var(--accent-bright);
+    border-color: var(--accent-bright);
+    background: rgba(183, 148, 244, 0.1);
+  }
+  
+  .status-error {
+    color: #fc8181;
+    border-color: #fc8181;
+    background: rgba(252, 129, 129, 0.1);
+  }
+  
+  @media (max-width: 1024px) {
+    .floating-orb {
+      width: 200px;
+      height: 200px;
+    }
+  }
 </style>
 </head>
 <body class="min-h-screen">
-  <div class="grid grid-cols-12 gap-4 max-w-7xl mx-auto p-4">
+  <div class="floating-orb orb-1"></div>
+  <div class="floating-orb orb-2"></div>
+  <div class="floating-orb orb-3"></div>
+  
+  <div class="grid grid-cols-12 gap-4 max-w-7xl mx-auto p-4 relative z-10">
     <aside class="col-span-12 lg:col-span-3 space-y-4">
       <div class="glass card rounded-2xl p-4">
-        <div class="flex items-center justify-between">
-          <h2 class="text-lg font-semibold">Chats</h2>
-          <button id="newChat" class="px-3 py-1 rounded-xl btn text-sm">New</button>
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="text-xl font-bold gradient-text">Chats</h2>
+          <button id="newChat" class="px-4 py-2 rounded-xl btn text-sm">✨ New</button>
         </div>
-        <div id="chatList" class="mt-3 space-y-2 max-h-[55vh] overflow-y-auto scrollbar"></div>
-        <div class="mt-4 flex gap-2">
-          <button id="exportChats" class="px-3 py-1 rounded-xl pill">Export</button>
-          <label class="px-3 py-1 rounded-xl pill cursor-pointer">
-            Import<input type="file" id="importFile" class="hidden" accept=".json"/>
+        <div id="chatList" class="space-y-2 max-h-[55vh] overflow-y-auto scrollbar"></div>
+        <div class="mt-4 flex gap-2 flex-wrap">
+          <button id="exportChats" class="px-3 py-1.5 rounded-xl pill text-sm">📥 Export</button>
+          <label class="px-3 py-1.5 rounded-xl pill cursor-pointer text-sm">
+            📤 Import<input type="file" id="importFile" class="hidden" accept=".json"/>
           </label>
-          <button id="clearChats" class="px-3 py-1 rounded-xl pill">Clear</button>
+          <button id="clearChats" class="px-3 py-1.5 rounded-xl pill text-sm">🗑️ Clear</button>
         </div>
       </div>
 
       <div class="glass card rounded-2xl p-4">
-        <h2 class="text-lg font-semibold mb-2">Models</h2>
-        <label class="block text-sm mb-1">Provider</label>
-        <select id="provider" class="w-full bg-transparent border rounded-xl p-2">
-          <option value="openai">OpenAI</option>
-          <option value="anthropic">Claude</option>
-          <option value="google">Gemini</option>
+        <h2 class="text-xl font-bold gradient-text mb-4">Models</h2>
+        <label class="block text-sm font-medium mb-2 text-ink-dim">Provider</label>
+        <select id="provider" class="w-full rounded-xl p-2.5 mb-4">
+          <option value="openai">🤖 OpenAI</option>
+          <option value="anthropic">🧠 Claude</option>
+          <option value="google">✨ Gemini</option>
         </select>
-        <label class="block text-sm mt-3 mb-1">Model</label>
-        <select id="model" class="w-full bg-transparent border rounded-xl p-2"></select>
-        <div class="mt-2">
-          <input id="customModel" placeholder="Custom model id (optional)" class="w-full bg-transparent border rounded-xl p-2 text-sm" />
-          <p class="text-xs text-slate-400 mt-1">You can override with any model id.</p>
+        <label class="block text-sm font-medium mb-2 text-ink-dim">Model</label>
+        <select id="model" class="w-full rounded-xl p-2.5"></select>
+        <div class="mt-4">
+          <input id="customModel" placeholder="Custom model id (optional)" class="w-full rounded-xl p-2.5 text-sm" />
+          <p class="text-xs text-ink-dim mt-2 opacity-70">Override with any model id</p>
         </div>
-        <div class="mt-4 flex items-center gap-2">
-          <input id="toggleSearch" type="checkbox" class="scale-125"/>
-          <label class="text-sm">Google Search tool</label>
-        </div>
-      </div>
-
-      <div class="glass card rounded-2xl p-4">
-        <h2 class="text-lg font-semibold mb-2">Keys & Access</h2>
-        <p class="text-xs text-slate-400 mb-2">Keys are saved locally in your browser. Server keys (if configured) require a password.</p>
-        <input id="openaiKey" class="w-full bg-transparent border rounded-xl p-2 mono" placeholder="OpenAI API key"/>
-        <input id="anthropicKey" class="w-full bg-transparent border rounded-xl p-2 mono mt-2" placeholder="Anthropic API key"/>
-        <input id="geminiKey" class="w-full bg-transparent border rounded-xl p-2 mono mt-2" placeholder="Gemini API key"/>
-        <input id="proPassword" class="w-full bg-transparent border rounded-xl p-2 mono mt-2" placeholder="Password for server keys"/>
-        <div class="mt-3 flex gap-2">
-          <button id="saveKeys" class="px-3 py-1 rounded-xl pill">Save</button>
-          <button id="clearKeys" class="px-3 py-1 rounded-xl pill">Clear</button>
+        <div class="mt-4 flex items-center gap-3">
+          <input id="toggleSearch" type="checkbox" class="w-4 h-4 rounded accent-accent"/>
+          <label class="text-sm cursor-pointer">🔍 Enable Google Search</label>
         </div>
       </div>
 
       <div class="glass card rounded-2xl p-4">
-        <h2 class="text-lg font-semibold mb-2">System Prompt</h2>
-        <textarea id="systemPrompt" rows="6" class="w-full bg-transparent border rounded-2xl p-3 text-sm mono"></textarea>
-        <button id="resetSystem" class="px-3 py-1 rounded-xl pill mt-2">Reset</button>
+        <h2 class="text-xl font-bold gradient-text mb-4">Keys & Access</h2>
+        <p class="text-xs text-ink-dim mb-4 opacity-70">Keys are saved locally. Server keys require password.</p>
+        <div class="space-y-3">
+          <input id="openaiKey" class="w-full rounded-xl p-2.5 mono" placeholder="🔑 OpenAI API key" type="password"/>
+          <input id="anthropicKey" class="w-full rounded-xl p-2.5 mono" placeholder="🔑 Anthropic API key" type="password"/>
+          <input id="geminiKey" class="w-full rounded-xl p-2.5 mono" placeholder="🔑 Gemini API key" type="password"/>
+          <input id="proPassword" class="w-full rounded-xl p-2.5 mono" placeholder="🔐 Server key password" type="password"/>
+        </div>
+        <div class="mt-4 flex gap-2">
+          <button id="saveKeys" class="px-4 py-2 rounded-xl pill text-sm">💾 Save</button>
+          <button id="clearKeys" class="px-4 py-2 rounded-xl pill text-sm">🗑️ Clear</button>
+        </div>
+      </div>
+
+      <div class="glass card rounded-2xl p-4">
+        <h2 class="text-xl font-bold gradient-text mb-4">System Prompt</h2>
+        <textarea id="systemPrompt" rows="6" class="w-full rounded-2xl p-3 text-sm mono scrollbar"></textarea>
+        <button id="resetSystem" class="px-4 py-2 rounded-xl pill mt-3 text-sm">🔄 Reset Default</button>
       </div>
     </aside>
 
     <main class="col-span-12 lg:col-span-9">
-      <div id="chat" class="glass card rounded-2xl p-4 h-[75vh] overflow-y-auto scrollbar"></div>
+      <div id="chat" class="glass card rounded-2xl p-6 h-[75vh] overflow-y-auto scrollbar"></div>
 
-      <div id="composer-wrapper" class="glass card rounded-2xl mt-4 p-3">
-        <div class="flex items-center gap-2 flex-wrap">
-          <label class="px-3 py-1 rounded-xl pill cursor-pointer text-sm">Upload
-            <input id="fileInput" type="file" class="hidden" multiple accept="image/*,.pdf,.txt,.md,.doc,.docx,.csv,.json,.xml"/>
-          </label>
-          <div id="fileChips" class="flex gap-2 flex-wrap"></div>
-          <div class="ml-auto flex items-center gap-3 text-sm">
-            <span class="tag rounded-xl px-2 py-1" id="status">Ready</span>
-            <button id="sendBtn" class="px-4 py-2 rounded-xl btn">Send</button>
+      <div id="composer-wrapper">
+        <div class="glass card rounded-2xl p-4">
+          <div class="flex items-center gap-3 flex-wrap mb-3">
+            <label class="px-4 py-2 rounded-xl pill cursor-pointer text-sm font-medium hover:scale-105 transition-transform">
+              📎 Upload
+              <input id="fileInput" type="file" class="hidden" multiple accept="image/*,.pdf,.txt,.md,.doc,.docx,.csv,.json,.xml"/>
+            </label>
+            <div id="fileChips" class="flex gap-2 flex-wrap flex-1"></div>
+            <div class="flex items-center gap-3">
+              <span class="tag rounded-xl px-3 py-1.5 text-sm font-medium status-ready" id="status">Ready</span>
+              <button id="sendBtn" class="px-6 py-2.5 rounded-xl btn font-semibold">Send ✨</button>
+            </div>
           </div>
+          <textarea id="prompt" rows="1" placeholder="Write your message..." class="w-full rounded-2xl p-4 text-base scrollbar"></textarea>
         </div>
-        <textarea id="prompt" rows="1" placeholder="Write your message..." class="w-full bg-transparent border rounded-2xl p-3 mt-3"></textarea>
       </div>
     </main>
   </div>
 
 <script>
-const DEFAULT_SYSTEM = `You are a careful, helpful assistant. Follow the user's instructions exactly, ask for missing context only when essential, cite concrete dates when clarifying time, and keep answers concise unless deeply technical. When images are attached, describe what you see before analyzing. Prefer bullet lists and short paragraphs for readability.`;
+const DEFAULT_SYSTEM = \`You are a careful, helpful assistant. Follow the user's instructions exactly, ask for missing context only when essential, cite concrete dates when clarifying time, and keep answers concise unless deeply technical. When images are attached, describe what you see before analyzing. Prefer bullet lists and short paragraphs for readability.\`;
 
 const PRESETS = {
   openai: [
@@ -634,12 +949,13 @@ function renderChatList(){
   chatListEl.innerHTML = "";
   state.chats.forEach(ch => {
     const btn = document.createElement("div");
-    btn.className = "p-2 rounded-xl hover:bg-slate-800 cursor-pointer flex items-center justify-between";
-    btn.innerHTML = `<span class="truncate">${ch.title}</span>
-      <div class="flex gap-2">
-        <button class="text-xs tag px-2 py-1 rounded-lg rename">Rename</button>
-        <button class="text-xs tag px-2 py-1 rounded-lg del">Del</button>
-      </div>`;
+    btn.className = "chat-item p-3 rounded-xl border border-transparent hover:border-accent cursor-pointer flex items-center justify-between transition-all";
+    btn.innerHTML = \`<span class="truncate font-medium">\${ch.title}</span>
+      <div class="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button class="text-xs tag px-2 py-1 rounded-lg rename">✏️</button>
+        <button class="text-xs tag px-2 py-1 rounded-lg del">🗑️</button>
+      </div>\`;
+    btn.classList.add("group");
     btn.onclick = (e) => { if (e.target.closest(".rename")||e.target.closest(".del")) return; state.activeId = ch.id; saveState(); renderActive(); };
     btn.querySelector(".rename").onclick = (e) => {
       e.stopPropagation();
@@ -654,7 +970,10 @@ function renderChatList(){
       if (state.activeId === ch.id) state.activeId = state.chats[0]?.id || null;
       saveState(); renderChatList(); renderActive();
     };
-    if (ch.id === state.activeId) btn.classList.add("bg-slate-800");
+    if (ch.id === state.activeId) {
+      btn.style.background = "rgba(159, 122, 234, 0.15)";
+      btn.style.borderColor = "var(--accent)";
+    }
     chatListEl.appendChild(btn);
   });
 }
@@ -683,23 +1002,36 @@ function setModelOptions(){
 
 function addBubble(role, text, atts=[]){
   const wrap = document.createElement("div");
-  wrap.className = "mb-3";
+  wrap.className = "mb-4";
   const b = document.createElement("div");
-  b.className = "rounded-2xl p-3 " + (role==="user"?"bubble-user":"bubble-assistant");
-  b.innerHTML = text ? `<div class="whitespace-pre-wrap">${sanitize(text)}</div>` : "";
+  b.className = "rounded-2xl p-4 max-w-[85%] " + (role==="user"?"bubble-user ml-auto":"bubble-assistant");
+  
+  const header = document.createElement("div");
+  header.className = "flex items-center gap-2 mb-2 text-sm opacity-70";
+  header.innerHTML = \`<span class="font-medium">\${role === "user" ? "You" : "AI"}</span>\`;
+  b.appendChild(header);
+  
+  if (text) {
+    const content = document.createElement("div");
+    content.className = "whitespace-pre-wrap leading-relaxed";
+    content.innerHTML = sanitize(text);
+    b.appendChild(content);
+  }
+  
   if (atts && atts.length){
     const grid = document.createElement("div");
-    grid.className = "grid grid-cols-3 gap-2 mt-2";
+    grid.className = "grid grid-cols-3 gap-3 mt-3";
     atts.forEach(a => {
       if ((a.mime||"").startsWith("image/")){
         const img = document.createElement("img");
         img.src = a.url; img.alt = a.name || "image";
-        img.className = "rounded-xl border";
+        img.className = "rounded-xl border border-border shadow-lg hover:scale-105 transition-transform cursor-pointer";
+        img.onclick = () => window.open(a.url, '_blank');
         grid.appendChild(img);
       } else {
         const link = document.createElement("a");
         link.href = a.url; link.textContent = a.name || a.url; link.target = "_blank";
-        link.className = "text-indigo-300 underline text-sm";
+        link.className = "text-accent-bright hover:text-accent underline text-sm font-medium";
         grid.appendChild(link);
       }
     });
@@ -710,7 +1042,9 @@ function addBubble(role, text, atts=[]){
 }
 
 function sanitize(s){
-  return s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
 }
 
 function scrollToBottom(){
@@ -721,9 +1055,6 @@ function growTextarea(){
   promptEl.style.height = "auto";
   const max = 240;
   promptEl.style.height = Math.min(promptEl.scrollHeight, max) + "px";
-  const compH = document.querySelector("#composer-wrapper").offsetHeight;
-  chatEl.style.paddingBottom = (compH + 8) + "px";
-  promptEl.scrollTop = promptEl.scrollHeight;
 }
 
 promptEl.addEventListener("input", growTextarea);
@@ -743,13 +1074,10 @@ toggleSearchEl.addEventListener("change", () => {
   saveState();
 });
 
-const DEFAULT_SYSTEM = document.getElementById("systemPrompt") ? document.getElementById("systemPrompt").value : DEFAULT_SYSTEM;
-document.getElementById("systemPrompt").value = state.systemPrompt;
-
-const systemPromptElRef = document.getElementById("systemPrompt");
-systemPromptElRef.addEventListener("input", () => { state.systemPrompt = systemPromptElRef.value; saveState(); });
-document.getElementById("resetSystem").onclick = () => {
-  systemPromptElRef.value = DEFAULT_SYSTEM;
+systemPromptEl.value = state.systemPrompt;
+systemPromptEl.addEventListener("input", () => { state.systemPrompt = systemPromptEl.value; saveState(); });
+resetSystemEl.onclick = () => {
+  systemPromptEl.value = DEFAULT_SYSTEM;
   state.systemPrompt = DEFAULT_SYSTEM; saveState();
 };
 
@@ -773,13 +1101,13 @@ saveKeysEl.onclick = () => {
   localStorage.setItem("anthropic_key", state.keys.anthropic);
   localStorage.setItem("gemini_key", state.keys.gemini);
   localStorage.setItem("pro_password", state.keys.pro_password);
-  status("Keys saved");
+  status("Keys saved ✅", "ready");
 };
 clearKeysEl.onclick = () => {
   ["openai_key","anthropic_key","gemini_key","pro_password"].forEach(k => localStorage.removeItem(k));
   state.keys = { openai:"",anthropic:"",gemini:"",pro_password:"" };
   syncKeysUI();
-  status("Keys cleared");
+  status("Keys cleared 🗑️", "ready");
 };
 
 newChatEl.onclick = newChat;
@@ -802,9 +1130,9 @@ importFileEl.onchange = (e) => {
       if (Array.isArray(arr)) {
         state.chats = arr.concat(state.chats);
         saveState(); renderChatList(); renderActive();
-        status("Imported chats");
-      } else status("Invalid file");
-    } catch { status("Invalid JSON"); }
+        status("Imported chats ✅", "ready");
+      } else status("Invalid file ❌", "error");
+    } catch { status("Invalid JSON ❌", "error"); }
   };
   reader.readAsText(f);
 };
@@ -818,19 +1146,22 @@ fileInput.onchange = async (e) => {
     const res = await fetch("/api/upload", { method:"POST", body: fd });
     const data = await res.json();
     (data.files||[]).forEach(addChip);
+    status("Files uploaded ✅", "ready");
   } catch(e) {
-    console.error(e); alert("Upload failed");
+    console.error(e); 
+    status("Upload failed ❌", "error");
   } finally {
     setBusy(false);
     fileInput.value = "";
   }
 };
+
 function addChip(f){
   filesToSend.push(f);
   const chip = document.createElement("div");
-  chip.className = "tag rounded-xl px-2 py-1 flex items-center gap-2";
-  chip.innerHTML = `<span class="text-xs truncate max-w-[160px]">${f.name || f.url}</span>
-    <button class="text-xs">×</button>`;
+  chip.className = "tag rounded-xl px-3 py-1.5 flex items-center gap-2 hover:scale-105 transition-transform";
+  chip.innerHTML = \`<span class="text-xs truncate max-w-[160px] font-medium">\${f.name || f.url}</span>
+    <button class="text-sm hover:text-red-400 transition-colors">×</button>\`;
   chip.querySelector("button").onclick = () => {
     filesToSend = filesToSend.filter(x => x.url !== f.url);
     chip.remove();
@@ -856,7 +1187,7 @@ sendBtn.onclick = async () => {
   promptEl.value=""; growTextarea();
   addBubble("user", txt, atts); scrollToBottom();
 
-  setBusy(true, "Thinking...");
+  setBusy(true, \`<div class="loading-dots"><span></span><span></span><span></span></div> Thinking...\`);
   try {
     const res = await fetch("/api/chat", {
       method:"POST",
@@ -882,20 +1213,39 @@ sendBtn.onclick = async () => {
     ch.messages.push({role:"assistant", content: out});
     saveState();
     addBubble("assistant", out); scrollToBottom();
+    status("Ready", "ready");
   } catch(err) {
     console.error(err);
     addBubble("assistant", "⚠️ " + (err.message || "Error"));
+    status("Error occurred", "error");
   } finally {
     setBusy(false);
   }
 };
 
-function status(msg){ statusEl.textContent = msg; setTimeout(() => statusEl.textContent="Ready", 2000); }
-function setBusy(isBusy, msg){ sendBtn.disabled = !!isBusy; statusEl.textContent = isBusy ? (msg||"…"): "Ready"; }
+function status(msg, type = "ready"){ 
+  statusEl.textContent = msg;
+  statusEl.className = \`tag rounded-xl px-3 py-1.5 text-sm font-medium status-\${type}\`;
+  if (type !== "busy") {
+    setTimeout(() => {
+      statusEl.textContent = "Ready";
+      statusEl.className = "tag rounded-xl px-3 py-1.5 text-sm font-medium status-ready";
+    }, 3000);
+  }
+}
+
+function setBusy(isBusy, msg){ 
+  sendBtn.disabled = !!isBusy; 
+  if (isBusy) {
+    statusEl.innerHTML = msg || "Working...";
+    statusEl.className = "tag rounded-xl px-3 py-1.5 text-sm font-medium status-busy";
+  } else {
+    statusEl.textContent = "Ready";
+    statusEl.className = "tag rounded-xl px-3 py-1.5 text-sm font-medium status-ready";
+  }
+}
 
 loadState();
-document.getElementById("systemPrompt").value = state.systemPrompt;
-document.getElementById("systemPrompt").addEventListener("input", () => { state.systemPrompt = document.getElementById("systemPrompt").value; saveState(); });
 document.addEventListener("DOMContentLoaded", () => { setModelOptions(); });
 setTimeout(growTextarea, 0);
 </script>
