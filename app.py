@@ -1,29 +1,48 @@
 # app.py
+# NovaMind — a clean, mobile-first chat UI powered under the hood
+# by Google's Gemini API (hidden from users). Two creative modes:
+# "Sage" (deeper reasoning) and "Spark" (faster replies).
+#
+# Defaults you asked for: temperature=1, thinking_budget=20000,
+# correct token limits & robust failover (Sage -> Spark) if rate-limited.
+
 import os, base64, json, mimetypes, time, re, tempfile
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 from flask import Flask, request, send_from_directory, make_response, jsonify, Response
 
-APP_TITLE = "Gemini Chat — 2.5 Pro & 2.5 Flash"
+# =========================
+# NovaMind — Server Config
+# =========================
+APP_TITLE = "NovaMind"
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR") or os.path.join(tempfile.gettempdir(), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# ----- Keys (Gemini only) -----
-GEMINI_KEYS = [k for k in [os.environ.get("GEMINI_KEY_1"), os.environ.get("GEMINI_KEY_2")] if k]
+# Hard-coded Google (Gemini) API key — used ONLY on the server (never exposed to the browser)
+# You asked to hardcode this exact key:
+GEMINI_KEYS = ["AIzaSyBqQQszYifOVY6396kV9lkEs1Tz3cSdmVo"]
 
-# ----- Models (fixed & simple) -----
-GEMINI_MODELS = [
-    {"id": "gemini-2.5-pro",   "label": "Gemini 2.5 Pro (reasoning)"},
-    {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash (fast)"},
+# UI model ids (no provider terms shown to users)
+NOVA_MODELS = [
+    {"id": "sage",  "label": "NovaMind — Sage (thinks deeper)"},
+    {"id": "spark", "label": "NovaMind — Spark (answers faster)"},
 ]
 
-# Official limits (Vertex/Gemini API docs)
-MAX_INPUT_TOKENS     = 1_048_576  # 1M context window
-MAX_OUTPUT_TOKENS    = 65_535     # default hard max
-# Thinking budgets by model (docs)
-PRO_BUDGET_MIN,  PRO_BUDGET_MAX  = 128,   32_768
-FLASH_BUDGET_MIN, FLASH_BUDGET_MAX = 0,     24_576
+# Internal mapping (server-only, users never see this)
+MODEL_MAP = {
+    "sage":  "gemini-2.5-pro",
+    "spark": "gemini-2.5-flash",
+}
 
+# Token clamps & thinking budgets
+MAX_INPUT_TOKENS  = 1_048_576
+MAX_OUTPUT_TOKENS = 65_535
+SAGE_BUDGET_MIN,  SAGE_BUDGET_MAX  = 128,   32_768   # gemini-2.5-pro
+SPARK_BUDGET_MIN, SPARK_BUDGET_MAX = 0,     24_576   # gemini-2.5-flash
+
+# =========================
+# Flask app & CORS
+# =========================
 app = Flask(__name__, static_folder=None)
 
 def cors(resp):
@@ -38,13 +57,16 @@ def _after(resp): return cors(resp)
 @app.route("/health")
 def health(): return "ok"
 
-# ---------- Utils ----------
+# =========================
+# Utilities
+# =========================
 def http_json(method, url, headers=None, data=None, timeout=120):
     body = json.dumps(data).encode("utf-8") if data is not None else None
     req = Request(url, data=body, method=method.upper())
     req.add_header("Content-Type", "application/json")
     if headers:
-        for k, v in headers.items(): req.add_header(k, v)
+        for k, v in headers.items():
+            req.add_header(k, v)
     try:
         with urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8")), None
@@ -72,20 +94,14 @@ def guess_mime(name_or_bytes):
     mt, _ = mimetypes.guess_type(str(name_or_bytes))
     return mt or "application/octet-stream"
 
-# ---------- Gemini-only client ----------
-_g_rr = 0
-def _pick_key():
-    global _g_rr
-    if not GEMINI_KEYS: return None
-    k = GEMINI_KEYS[_g_rr % len(GEMINI_KEYS)]
-    _g_rr += 1
-    return k
-
-def _is_quota429(err):
+def _is_quota_or_busy(err):
     try:
         if isinstance(err, dict):
             e = err.get("error") or err
-            return e.get("status") == "RESOURCE_EXHAUSTED" or e.get("code") == 429 or "RESOURCE_EXHAUSTED" in json.dumps(err)
+            code = e.get("code")
+            status = e.get("status") or ""
+            s_dump = json.dumps(err)
+            return code == 429 or "RESOURCE_EXHAUSTED" in status or "RESOURCE_EXHAUSTED" in s_dump
         if isinstance(err, str):
             return "RESOURCE_EXHAUSTED" in err or '"code": 429' in err
     except Exception:
@@ -93,7 +109,7 @@ def _is_quota429(err):
     return False
 
 def _extract_text_and_thoughts(data):
-    """Return (text, thoughts_summary) where thoughts_summary may be ''."""
+    """Return (text, thoughts_summary) from API response."""
     try:
         cands = (data or {}).get("candidates") or []
         if not cands: return None, ""
@@ -110,23 +126,32 @@ def _extract_text_and_thoughts(data):
         text = "\n".join(text_parts).strip()
         thoughts = "\n".join(thought_parts).strip()
         if text: return text, thoughts
-        # very rare fallback
         if isinstance(c0.get("text"), str) and c0["text"].strip():
             return c0["text"].strip(), thoughts
         return None, thoughts
     except Exception:
         return None, ""
 
-def _gemini_generate(model, system_prompt, messages, cfg, key):
-    """One attempt with a specific model/key."""
-    base = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+# =========================
+# Gemini (server-side only)
+# =========================
+_g_rr = 0
+def _pick_key():
+    global _g_rr
+    if not GEMINI_KEYS: return None
+    k = GEMINI_KEYS[_g_rr % len(GEMINI_KEYS)]
+    _g_rr += 1
+    return k
+
+def _gemini_generate(model_id, system_prompt, messages, cfg, key):
+    base = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={key}"
 
     def to_parts(turn):
         parts = []
         txt = turn.get("content") or ""
         if txt: parts.append({"text": txt})
         for att in turn.get("attachments", []):
-            url = att.get("url"); 
+            url = att.get("url")
             if not url: continue
             try: b = fetch_bytes(url)
             except Exception: continue
@@ -144,49 +169,57 @@ def _gemini_generate(model, system_prompt, messages, cfg, key):
     payload = {"contents": contents, "generationConfig": cfg}
     data, err = http_json("POST", base, {}, payload, timeout=120)
     if err: return None, None, err
+
+    # Handle promptFeedback "blocked" situations cleanly
+    pf = data.get("promptFeedback") or {}
+    if pf.get("blockReason"):
+        return None, None, {"status":"BLOCKED","error":pf}
+
     text, thoughts = _extract_text_and_thoughts(data)
     if not text:
-        return None, None, {"status":"NO_TEXT","error":"Gemini returned no text","raw":data}
+        return None, None, {"status":"NO_TEXT","error":"No text returned", "raw": data}
+
     meta = {
-        "provider": "gemini",
-        "model": model,
         "usage": data.get("usageMetadata", {}),
-        "modelVersion": data.get("modelVersion"),
         "responseId": data.get("responseId"),
+        "modelVersion": data.get("modelVersion"),
         "thoughts_included": bool(thoughts),
     }
     if thoughts: meta["thoughts"] = thoughts
     return text, meta, None
 
-def gemini_chat_with_failover(model, system_prompt, messages, cfg):
-    """Try model/key combos: requested model first, then the other; rotate keys."""
+def novamind_chat_with_failover(ui_model, system_prompt, messages, cfg):
     if not GEMINI_KEYS:
-        return None, None, {"error":"Gemini API key not configured"}
-    # model order: requested -> the other
-    models = [model] if model else []
-    for m in ["gemini-2.5-pro","gemini-2.5-flash"]:
-        if m not in models: models.append(m)
+        return None, None, {"error":"Server key not configured"}
+    # Try requested first, then the other
+    primary = MODEL_MAP.get(ui_model, MODEL_MAP["sage"])
+    secondary = MODEL_MAP["spark"] if primary == MODEL_MAP["sage"] else MODEL_MAP["sage"]
+    models = [primary, secondary]
 
-    # key order: start from round-robin index
+    # rotate keys
     start = globals().get("_g_rr", 0) % len(GEMINI_KEYS)
     keys = GEMINI_KEYS[start:] + GEMINI_KEYS[:start]
 
     last_err = None
-    for m in models:
+    for mid in models:
         for k in keys:
-            out, meta, err = _gemini_generate(m, system_prompt, messages, cfg, k)
+            out, meta, err = _gemini_generate(mid, system_prompt, messages, cfg, k)
             if not err and out:
-                meta = meta or {}; meta["model_used"] = m; meta["key_index"] = keys.index(k)
+                meta = meta or {}
+                meta["mode_used"] = "sage" if mid == MODEL_MAP["sage"] else "spark"
                 return out, meta, None
-            if err and not _is_quota429(err):
+            if err and not _is_quota_or_busy(err):
                 return None, None, err
             last_err = err
     return None, None, last_err or {"error":"Unknown error"}
 
-# ---------- API ----------
+# =========================
+# API
+# =========================
 @app.route("/api/models")
 def api_models():
-    return jsonify(GEMINI_MODELS)
+    # Return only NovaMind names (no provider terms)
+    return jsonify(NOVA_MODELS)
 
 @app.route("/api/upload", methods=["POST", "OPTIONS"])
 def upload():
@@ -212,33 +245,52 @@ def api_chat():
         return cors(make_response(("", 204)))
     data = request.get_json(force=True, silent=True) or {}
 
-    model = data.get("model") or "gemini-2.5-pro"
-    system_prompt = data.get("system_prompt") or ""
+    ui_model = data.get("model") or "sage"         # "sage" (default) or "spark"
+    system_prompt = """You are NovaMind, an expert AI assistant who is unfailingly helpful, friendly, and deeply knowledgeable across all domains.
+
+Your primary goals are to:
+1. Understand the user’s intent clearly, even if it is implied rather than explicit.  
+2. Respond with thorough, well-structured, and complete answers without omitting any important details.  
+3. When the user asks for code, always provide the full, runnable, and production-ready code with no placeholders, no partial snippets, and no cutting corners. Include imports, setup, configuration, comments, and usage examples so the code works immediately when copied.  
+4. Write code that follows best practices for clarity, efficiency, maintainability, and security.  
+5. For non-code requests, respond with the same depth and care, using clear formatting, lists, tables, or examples as appropriate.
+
+Additional behavior rules:  
+- Always use the clearest and most readable formatting for code blocks, with syntax highlighting.  
+- If there are multiple approaches, explain each briefly and recommend the best one.  
+- When appropriate, include extra tips, edge-case handling, and optional enhancements.  
+- Maintain a friendly, respectful, and professional tone at all times.  
+- Do not refuse reasonable requests unless they clearly violate safety or legal guidelines.
+
+Your goal is to make the user feel they have a highly competent and generous expert partner who gives them more than they expected, especially when providing code.
+"""
     messages = data.get("messages") or []
     attachments = data.get("attachments") or []
-    # normalize: attach pending uploads to last user turn
+
+    # attach pending uploads to last user turn
     if attachments:
         for i in range(len(messages)-1, -1, -1):
             if messages[i].get("role") == "user":
                 messages[i].setdefault("attachments", []).extend(attachments)
                 break
 
-    # ---- generation config (with clamps) ----
-    temperature = float(data.get("temperature") or 1.0)
-    # output tokens clamp
+    # ---- generation config (clamped) ----
+    try: temperature = float(data.get("temperature") or 1.0)
+    except: temperature = 1.0
+    temperature = max(0.0, min(2.0, temperature))
+
     try: max_out = int(data.get("max_output_tokens") or 4096)
     except: max_out = 4096
     max_out = max(1, min(MAX_OUTPUT_TOKENS, max_out))
 
-    # thinking budget clamp by model
     try: budget = int(data.get("thinking_budget") or 20000)
     except: budget = 20000
-    if model == "gemini-2.5-pro":
-        budget = max(PRO_BUDGET_MIN, min(PRO_BUDGET_MAX, budget))
+    if ui_model == "sage":
+        budget = max(SAGE_BUDGET_MIN, min(SAGE_BUDGET_MAX, budget))
     else:
-        budget = max(FLASH_BUDGET_MIN, min(FLASH_BUDGET_MAX, budget))
+        budget = max(SPARK_BUDGET_MIN, min(SPARK_BUDGET_MAX, budget))
 
-    include_thoughts = bool(data.get("include_thoughts"))  # default false
+    include_thoughts = bool(data.get("include_thoughts"))  # default False
 
     cfg = {
         "temperature": temperature,
@@ -251,14 +303,17 @@ def api_chat():
     }
 
     try:
-        out, meta, err = gemini_chat_with_failover(model, system_prompt, messages, cfg)
+        out, meta, err = novamind_chat_with_failover(ui_model, system_prompt, messages, cfg)
         if err:
             return jsonify({"error": err}), 502
+        # Never leak provider names; meta only has usage and anonymized mode
         return jsonify({"output": out, "meta": meta})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ---------- UI (minimal: top model selector, bottom settings) ----------
+# =========================
+# Minimal, clean UI (mobile-first)
+# =========================
 HTML = """<!doctype html>
 <html lang="en">
 <head>
@@ -272,7 +327,7 @@ HTML = """<!doctype html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#0b1220; --card:#0f172a; --muted:#94a3b8; --ring:rgba(99,102,241,.5); }
+  :root { --bg:#0b1220; --muted:#94a3b8; }
   * { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
   body { background: radial-gradient(900px 700px at 10% 10%, rgba(99,102,241,.12), transparent 40%), var(--bg); color:#e5e7eb; }
   .glass { background: rgba(15,23,42,.6); backdrop-filter: blur(14px); border:1px solid rgba(255,255,255,.06); }
@@ -284,7 +339,8 @@ HTML = """<!doctype html>
   .bubble-a { background: rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08); border-radius:16px 16px 16px 4px; }
   .markdown pre { background: rgba(0,0,0,.45); padding:12px; border-radius:12px; overflow:auto; }
   .chip { background: rgba(99,102,241,.15); border:1px solid rgba(99,102,241,.35); }
-  .settings { position: sticky; bottom: 0; }
+  header .brand { letter-spacing: .3px; }
+  summary { outline: none; }
 </style>
 </head>
 <body>
@@ -292,10 +348,10 @@ HTML = """<!doctype html>
   <div class="max-w-5xl mx-auto px-3 sm:px-4 py-3 flex items-center justify-between gap-3">
     <div class="flex items-center gap-3">
       <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600"></div>
-      <div class="text-sm sm:text-base font-semibold">{{TITLE}}</div>
+      <div class="brand text-sm sm:text-base font-semibold">{{TITLE}}</div>
     </div>
     <div class="flex items-center gap-2">
-      <label class="hidden sm:block text-xs text-slate-300">Model</label>
+      <label class="hidden sm:block text-xs text-slate-300">Mode</label>
       <select id="model" class="input rounded-lg px-2 py-1.5 text-sm"></select>
     </div>
   </div>
@@ -306,7 +362,7 @@ HTML = """<!doctype html>
 
   <div class="mt-3 glass rounded-2xl p-3 sm:p-4">
     <div class="flex items-end gap-2">
-      <textarea id="prompt" rows="3" class="input flex-1 px-3 py-3 rounded-xl" placeholder="Message Gemini..."></textarea>
+      <textarea id="prompt" rows="3" class="input flex-1 px-3 py-3 rounded-xl" placeholder="Message {{TITLE}}..."></textarea>
       <button id="send" class="btn btn-primary px-4 py-3 rounded-xl">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
       </button>
@@ -319,7 +375,7 @@ HTML = """<!doctype html>
   </div>
 
   <!-- Bottom Settings -->
-  <div class="settings mt-3 glass rounded-2xl p-3 sm:p-4">
+  <div class="mt-3 glass rounded-2xl p-3 sm:p-4">
     <details>
       <summary class="cursor-pointer select-none text-sm text-slate-300">Settings</summary>
       <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 mt-3">
@@ -334,7 +390,7 @@ HTML = """<!doctype html>
         <div>
           <label class="text-xs text-slate-400">Thinking budget</label>
           <input id="budget" type="number" min="0" max="32768" value="20000" class="input w-full px-3 py-2 rounded-lg"/>
-          <p id="budgetHint" class="text-[11px] text-slate-400 mt-1">Pro: 128–32768 • Flash: 0–24576</p>
+          <p id="budgetHint" class="text-[11px] text-slate-400 mt-1">Sage: 128–32768 • Spark: 0–24576</p>
         </div>
         <div class="flex items-end">
           <label class="flex items-center gap-2 text-sm">
@@ -354,7 +410,7 @@ const modelEl = $("#model"), tempEl = $("#temperature"), maxOutEl = $("#maxOut")
 const budgetEl = $("#budget"), includeThoughtsEl = $("#includeThoughts"), budgetHint = $("#budgetHint");
 
 let files = [];
-let state = { messages: [], model: "gemini-2.5-pro" };
+let state = { messages: [], model: "sage" };
 
 function addBubble(role, text, thoughts){
   const wrap = document.createElement("div");
@@ -364,7 +420,7 @@ function addBubble(role, text, thoughts){
   const who = document.createElement("div"); who.className="text-[10px] uppercase tracking-wide text-slate-400 mb-1";
   who.textContent = role==="user" ? "You" : "Assistant"; b.appendChild(who);
   const md = document.createElement("div"); md.className="markdown text-sm";
-  md.innerHTML = marked.parse(text || ""); b.appendChild(md);
+  md.innerHTML = window.marked.parse(text || ""); b.appendChild(md);
   if (thoughts && thoughts.trim()){
     const th = document.createElement("details");
     th.className="mt-2";
@@ -394,15 +450,15 @@ async function loadModels(){
     modelEl.value = state.model;
     syncBudgetRange();
   }catch(e){
-    modelEl.innerHTML = `<option value="gemini-2.5-pro">Gemini 2.5 Pro</option><option value="gemini-2.5-flash">Gemini 2.5 Flash</option>`;
+    modelEl.innerHTML = `<option value="sage">NovaMind — Sage (thinks deeper)</option><option value="spark">NovaMind — Spark (answers faster)</option>`;
   }
 }
 function syncBudgetRange(){
-  const isPro = modelEl.value === "gemini-2.5-pro";
-  budgetEl.min = isPro ? 128 : 0;
-  budgetEl.max = isPro ? 32768 : 24576;
-  budgetHint.textContent = "Pro: 128–32768 • Flash: 0–24576";
-  if (isPro && Number(budgetEl.value) < 128) budgetEl.value = 20000;
+  const isSage = modelEl.value === "sage";
+  budgetEl.min = isSage ? 128 : 0;
+  budgetEl.max = isSage ? 32768 : 24576;
+  budgetHint.textContent = "Sage: 128–32768 • Spark: 0–24576";
+  if (isSage && Number(budgetEl.value) < 128) budgetEl.value = 20000;
 }
 
 fileInput.addEventListener("change", async () => {
@@ -430,17 +486,17 @@ sendBtn.addEventListener("click", async ()=>{
   const text = promptEl.value.trim();
   if (!text && files.length===0) return;
   state.model = modelEl.value;
-  // push user turn
+
   const atts = files.slice(); files = []; chips.innerHTML="";
   state.messages.push({role:"user", content:text, attachments:atts});
   addBubble("user", text);
   promptEl.value=""; setStatus("Thinking...","loading");
 
-  // clamp outputs & budget client-side (server clamps again)
+  // local clamp (server clamps again)
   let maxOut = Math.min(Math.max(parseInt(maxOutEl.value||"4096"), 1), 65535);
   let temp = Math.min(Math.max(parseFloat(tempEl.value||"1"), 0), 2);
   let budget = parseInt(budgetEl.value||"20000");
-  if (state.model==="gemini-2.5-pro"){ budget = Math.min(Math.max(budget,128),32768); }
+  if (state.model==="sage"){ budget = Math.min(Math.max(budget,128),32768); }
   else { budget = Math.min(Math.max(budget,0),24576); }
 
   try{
