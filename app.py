@@ -654,43 +654,6 @@ def api_models_v2():
         }
     })
 
-@app.route("/api/upload", methods=["POST", "OPTIONS"])
-def api_upload():
-    """Handle file uploads"""
-    if request.method == "OPTIONS":
-        return "", 204
-    
-    files = request.files.getlist("files")
-    uploaded = []
-    
-    for file in files:
-        if file and file.filename:
-            # Generate safe filename
-            timestamp = int(time.time() * 1000)
-            safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', file.filename)
-            filename = f"{timestamp}_{safe_name}"
-            filepath = os.path.join(UPLOAD_DIR, filename)
-            
-            # Save file
-            file.save(filepath)
-            
-            # Get file info
-            mime_type = mimetypes.guess_type(filepath)[0] or 'application/octet-stream'
-            
-            uploaded.append({
-                "name": file.filename,
-                "url": f"/uploads/{filename}",
-                "mime": mime_type,
-                "size": os.path.getsize(filepath)
-            })
-    
-    return jsonify({"files": uploaded})
-
-@app.route("/uploads/<path:filename>")
-def serve_upload(filename):
-    """Serve uploaded files"""
-    return send_from_directory(UPLOAD_DIR, filename)
-
 @app.route("/api/v2/chat", methods=["POST"])
 def api_chat_v2():
     """Advanced chat endpoint with all features"""
@@ -1891,32 +1854,29 @@ class NovaMindClient {
   
   async sendMessage() {
     const input = document.getElementById('messageInput');
-    const content = input.value.trim();
+    \1
     
-    if (!content && this.attachments.length === 0) return;
+    // Snapshot attachments before we clear them
+    const attachments = this.attachments.slice();
     
     // Disable input
     input.disabled = true;
     document.getElementById('sendBtn').disabled = true;
     
-    // Save attachments before clearing
-    const currentAttachments = [...this.attachments];
-    
     // Add user message to UI
-    this.addMessage('user', content, currentAttachments);
+    this.addMessage('user', content, attachments);
     
     // Clear input
     input.value = '';
     input.style.height = 'auto';
-    
     // Update messages array
     this.messages.push({
       role: 'user',
       content: content,
-      attachments: currentAttachments
+      attachments: attachments
     });
     
-    // Clear attachments after using them
+    // Clear input attachments after queuing
     this.attachments = [];
     
     // Show typing indicator
@@ -2200,7 +2160,7 @@ window.toggleFeature = function(feature, ev) {
   }
   
   // Update UI
-  ev.currentTarget.classList.toggle('active');
+  ev && ev.currentTarget && ev.currentTarget.classList.toggle('active');
 };
 
 window.copyCode = function(button) {
