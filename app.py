@@ -654,6 +654,43 @@ def api_models_v2():
         }
     })
 
+@app.route("/api/upload", methods=["POST", "OPTIONS"])
+def api_upload():
+    """Handle file uploads"""
+    if request.method == "OPTIONS":
+        return "", 204
+    
+    files = request.files.getlist("files")
+    uploaded = []
+    
+    for file in files:
+        if file and file.filename:
+            # Generate safe filename
+            timestamp = int(time.time() * 1000)
+            safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', file.filename)
+            filename = f"{timestamp}_{safe_name}"
+            filepath = os.path.join(UPLOAD_DIR, filename)
+            
+            # Save file
+            file.save(filepath)
+            
+            # Get file info
+            mime_type = mimetypes.guess_type(filepath)[0] or 'application/octet-stream'
+            
+            uploaded.append({
+                "name": file.filename,
+                "url": f"/uploads/{filename}",
+                "mime": mime_type,
+                "size": os.path.getsize(filepath)
+            })
+    
+    return jsonify({"files": uploaded})
+
+@app.route("/uploads/<path:filename>")
+def serve_upload(filename):
+    """Serve uploaded files"""
+    return send_from_directory(UPLOAD_DIR, filename)
+
 @app.route("/api/v2/chat", methods=["POST"])
 def api_chat_v2():
     """Advanced chat endpoint with all features"""
@@ -684,7 +721,7 @@ def api_chat_v2():
     
     # Memory integration
     if data.get("use_memory", True):
-        memory = self._get_conversation_memory(conversation_id)
+        memory = _get_conversation_memory(conversation_id)
         if memory:
             system_prompt += f"\n\n[CONVERSATION MEMORY]\n{memory}\n[END MEMORY]"
     
@@ -708,8 +745,8 @@ def api_chat_v2():
             return jsonify({"error": error}), 500
         
         # Save to database
-        self._save_message(conversation_id, "user", messages[-1].get("content", ""), messages[-1].get("attachments"))
-        self._save_message(conversation_id, "assistant", text, [], metadata)
+        _save_message(conversation_id, "user", messages[-1].get("content", ""), messages[-1].get("attachments"))
+        _save_message(conversation_id, "assistant", text, [], metadata)
         
         return jsonify({
             "response": text,
@@ -1582,19 +1619,19 @@ pre {
   <div class="max-w-5xl mx-auto p-4">
     <!-- Feature buttons -->
     <div class="flex gap-2 mb-3">
-      <button class="feature-btn px-3 py-1 text-xs" onclick="toggleFeature('voice')">
+      <button class="feature-btn px-3 py-1 text-xs" onclick="toggleFeature('voice', event)">
         🎤 Voice
       </button>
-      <button class="feature-btn px-3 py-1 text-xs" onclick="toggleFeature('code')">
+      <button class="feature-btn px-3 py-1 text-xs" onclick="toggleFeature('code', event)">
         💻 Code Mode
       </button>
-      <button class="feature-btn px-3 py-1 text-xs" onclick="toggleFeature('web')">
+      <button class="feature-btn px-3 py-1 text-xs" onclick="toggleFeature('web', event)">
         🌐 Web Search
       </button>
-      <button class="feature-btn px-3 py-1 text-xs" onclick="toggleFeature('image')">
+      <button class="feature-btn px-3 py-1 text-xs" onclick="toggleFeature('image', event)">
         🖼️ Image Gen
       </button>
-      <button class="feature-btn px-3 py-1 text-xs" onclick="toggleFeature('memory')">
+      <button class="feature-btn px-3 py-1 text-xs" onclick="toggleFeature('memory', event)">
         🧠 Memory
       </button>
       <label class="feature-btn px-3 py-1 text-xs cursor-pointer">
@@ -1862,20 +1899,25 @@ class NovaMindClient {
     input.disabled = true;
     document.getElementById('sendBtn').disabled = true;
     
+    // Save attachments before clearing
+    const currentAttachments = [...this.attachments];
+    
     // Add user message to UI
-    this.addMessage('user', content, this.attachments);
+    this.addMessage('user', content, currentAttachments);
     
     // Clear input
     input.value = '';
     input.style.height = 'auto';
-    this.attachments = [];
     
     // Update messages array
     this.messages.push({
       role: 'user',
       content: content,
-      attachments: this.attachments
+      attachments: currentAttachments
     });
+    
+    // Clear attachments after using them
+    this.attachments = [];
     
     // Show typing indicator
     this.showTypingIndicator();
@@ -2149,7 +2191,7 @@ class NovaMindClient {
 }
 
 // Global functions
-window.toggleFeature = function(feature) {
+window.toggleFeature = function(feature, ev) {
   const client = window.novamindClient;
   if (client.features.has(feature)) {
     client.features.delete(feature);
@@ -2158,7 +2200,7 @@ window.toggleFeature = function(feature) {
   }
   
   // Update UI
-  event.target.classList.toggle('active');
+  ev.currentTarget.classList.toggle('active');
 };
 
 window.copyCode = function(button) {
