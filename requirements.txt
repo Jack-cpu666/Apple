@@ -1,8 +1,44 @@
-Flask==3.0.3
-requests==2.32.3
-gunicorn==22.0.0
+# Core Flask dependencies
+Flask==3.0.0
+flask-cors==4.0.0
+Werkzeug==3.0.1
 
-# optional SDKs (the app uses REST, but these are handy to have)
-openai==1.46.0
-anthropic==0.38.0
-google-generativeai==0.7.2
+# Production server
+gunicorn==21.2.0
+
+# Environment management
+python-dotenv==1.0.0
+
+# Optional but recommended for better performance
+# Uncomment if needed:
+
+# Async support (if implementing WebSocket features)
+# flask-socketio==5.3.5
+# python-socketio==5.10.0
+
+# For enhanced JSON performance
+# ujson==5.9.0
+
+# For better datetime handling
+# python-dateutil==2.8.2
+
+# For secure token generation (though secrets is built-in)
+# cryptography==41.0.7
+
+# For request validation
+# marshmallow==3.20.1
+
+# For caching (Redis-based, optional)
+# redis==5.0.1
+# flask-caching==2.1.0
+
+# For rate limiting
+# flask-limiter==3.5.0
+
+# For monitoring and metrics (optional)
+# prometheus-flask-exporter==0.23.0
+
+# Development tools (optional)
+# flask-debugtoolbar==0.13.1
+# pylint==3.0.3
+# black==23.12.1
