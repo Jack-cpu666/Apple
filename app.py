@@ -1,16 +1,3 @@
-# app.py
-# NovaMind Ultra — Advanced AI Assistant Platform (v3.6)
-# Full fixed code for Render.com deployment with hardcoded API key option
-# ---------------------------------------------------------------------
-# Quick start on Render (or anywhere):
-#   1) Replace HARDCODED_GEMINI_KEY with your real key (from Google AI Studio)
-#   2) Start command: python app.py
-#   3) Open the web service URL and chat
-#
-# Note: For security, hardcoding keys is discouraged in production. This file
-# does it only because you requested it. You can still use env var override.
-# ---------------------------------------------------------------------
-
 import os, base64, json, mimetypes, time, re, tempfile, hashlib, threading, io, sys, traceback
 import sqlite3, uuid, datetime, gzip
 from collections import defaultdict, deque
@@ -21,11 +8,8 @@ from flask import Flask, request, send_from_directory, jsonify, Response, stream
 from flask_cors import CORS
 import ast
 
-# =========================
-# Configuration
-# =========================
 APP_TITLE = "NovaMind Ultra"
-VERSION = "3.6.0"
+VERSION = "3.7.0"
 
 TMP = tempfile.gettempdir()
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR") or os.path.join(TMP, "novamind_uploads")
@@ -35,34 +19,27 @@ PLUGINS_DIR = os.path.join(TMP, "novamind_plugins")
 for d in [UPLOAD_DIR, CACHE_DIR, SESSIONS_DIR, PLUGINS_DIR]:
     os.makedirs(d, exist_ok=True)
 
-# ---- HARD-CODED KEY (replace the string below) ----
-HARDCODED_GEMINI_KEY = "YOUR_GEMINI_KEY_HERE"  # <<< REPLACE THIS STRING
-# You can also set GOOGLE_API_KEYS env var (comma-separated). If present,
-# it will be used IN ADDITION to the hardcoded key.
+HARDCODED_GEMINI_KEY = "YOUR_GEMINI_KEY_HERE"
 
 _env_keys = [k.strip() for k in os.environ.get("GOOGLE_API_KEYS", "").split(",") if k.strip()]
-_GOOGLE_KEYS = ([HARDCODED_GEMINI_KEY] if HARDCODED_GEMINI_KEY and HARDCODED_GEMINI_KEY != "AIzaSyCa7P192Lu1OGP3c5Q_BB8ADY4UpZMB2a4" else []) + _env_keys
+_GOOGLE_KEYS = ([HARDCODED_GEMINI_KEY] if HARDCODED_GEMINI_KEY and "AIzaSyCa7P192Lu1OGP3c5Q_BB8ADY4UpZMB2a4" not in HARDCODED_GEMINI_KEY else []) + _env_keys
 
-# Public models for the UI
 NOVA_MODELS = [
-    {"id": "ultra",  "label": "🚀 NovaMind Ultra — Maximum Intelligence", "features": ["vision","code","analysis","creativity"]},
-    {"id": "sage",   "label": "🧙 NovaMind Sage — Deep Reasoning",          "features": ["analysis","research","planning"]},
-    {"id": "spark",  "label": "⚡ NovaMind Spark — Lightning Fast",         "features": ["speed","efficiency","realtime"]},
-    {"id": "vision", "label": "👁️ NovaMind Vision — Multimodal Expert",     "features": ["images","documents","ocr"]},
+    {"id": "ultra",  "label": "🚀 NovaMind Ultra (Pro 1.5)", "features": ["vision","code","analysis","creativity"]},
+    {"id": "sage",   "label": "🧙 NovaMind Sage (Pro 1.5)", "features": ["analysis","research","planning"]},
+    {"id": "spark",  "label": "⚡ NovaMind Spark (Flash 1.5)", "features": ["speed","efficiency","realtime"]},
+    {"id": "vision", "label": "👁️ NovaMind Vision (Pro 1.5)", "features": ["images","documents","ocr"]},
 ]
 
 MODEL_MAP = {
     "ultra": "gemini-2.5-pro",
-    "sage": "gemini-2.5-pro",
-    "spark": "gemini-2.5-flash",
-    "vision": "gemini-2.5-pro",
+    "sage": "gemini-1.5-pro-latest",
+    "spark": "gemini-1.5-flash-latest",
+    "vision": "gemini-1.5-pro-latest",
 }
 
-TOKEN_LIMITS = {"max_input": 1_048_576, "max_output": 65_535}
+TOKEN_LIMITS = {"max_input": 1_048_576, "max_output": 8192}
 
-# =========================
-# Database
-# =========================
 DB_PATH = os.path.join(SESSIONS_DIR, "novamind.db")
 
 def init_database():
@@ -122,9 +99,6 @@ def init_database():
 
 init_database()
 
-# =========================
-# App + Security Headers (Render-friendly SSE)
-# =========================
 app = Flask(__name__, static_folder=None)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
@@ -133,14 +107,10 @@ def add_security_headers(resp):
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["X-Frame-Options"] = "DENY"
     resp.headers["X-XSS-Protection"] = "1; mode=block"
-    # These help SSE through proxies like Render/Cloudflare
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, no-transform"
     resp.headers["X-Accel-Buffering"] = "no"
     return resp
 
-# =========================
-# Utilities
-# =========================
 class AdvancedCache:
     def __init__(self, max_size=1000):
         self.cache = {}; self.order = deque(maxlen=max_size); self.lock = threading.Lock()
@@ -168,9 +138,6 @@ def generate_session_id():
 def generate_conversation_id():
     return f"conv_{uuid.uuid4().hex}"
 
-# =========================
-# File Uploads
-# =========================
 @app.route("/api/upload", methods=["POST"])
 def api_upload():
     files = request.files.getlist("files")
@@ -194,9 +161,6 @@ def api_upload():
 def serve_upload(filename):
     return send_from_directory(UPLOAD_DIR, filename)
 
-# =========================
-# Sandboxed Code Executor
-# =========================
 _ALLOWED_BUILTINS = {
     "print": print, "len": len, "range": range, "int": int, "float": float, "str": str,
     "list": list, "dict": dict, "tuple": tuple, "set": set, "bool": bool, "sorted": sorted,
@@ -245,9 +209,6 @@ class CodeExecutor:
             return {"success": False, "output": stdout_buf.getvalue(), "error": "Timeout"}
         return {"success": True, "output": stdout_buf.getvalue(), "error": stderr_buf.getvalue()}
 
-# =========================
-# Plugins
-# =========================
 class PluginManager:
     def __init__(self):
         self.plugins = {}; self.load_plugins()
@@ -274,9 +235,6 @@ context = {json.dumps(context)}
 
 plugin_manager = PluginManager()
 
-# =========================
-# AI Backend (Gemini REST)
-# =========================
 class NovaMindBackend:
     def __init__(self):
         self.key_index = 0
@@ -293,16 +251,18 @@ class NovaMindBackend:
         slot["count"] += 1; return True
     def _enhance_prompt(self, base: str, model_id: str) -> str:
         presets = {
-            "ultra": "You are NovaMind Ultra — concise, helpful, structured. Prefer bullet points and include edge cases.",
-            "sage": "You are NovaMind Sage — reason stepwise, compare alternatives, keep it tight.",
-            "spark": "You are NovaMind Spark — optimize for speed and brevity.",
-            "vision": "You are NovaMind Vision — describe visuals precisely when images are present.",
+            "ultra": "You are NovaMind Ultra — a powerful, concise, and helpful AI assistant. Structure your answers clearly, often using lists or tables. Be direct.",
+            "sage": "You are NovaMind Sage — an AI expert in deep reasoning and planning. Think step-by-step, compare alternatives, and provide logical, well-supported conclusions.",
+            "spark": "You are NovaMind Spark — an extremely fast and efficient AI. Prioritize speed and brevity in your responses.",
+            "vision": "You are NovaMind Vision — a multimodal AI that excels at analyzing images. When an image is provided, describe its contents and significance in detail.",
         }
         return f"[SYSTEM]\n{presets.get(model_id, presets['ultra'])}\n[/SYSTEM]\n\n{base or ''}"
     def _build_contents(self, system_prompt: str, messages: list):
         contents = []
         if system_prompt:
             contents.append({"role": "user", "parts": [{"text": system_prompt}]})
+            contents.append({"role": "model", "parts": [{"text": "Understood. I will follow all system instructions."}]})
+
         for m in messages:
             parts = []
             if m.get("content"): parts.append({"text": m["content"]})
@@ -316,7 +276,8 @@ class NovaMindBackend:
                 except Exception:
                     pass
             role = "user" if m.get("role") != "assistant" else "model"
-            contents.append({"role": role, "parts": parts})
+            if parts:
+                contents.append({"role": role, "parts": parts})
         return contents
     def _fetch_attachment(self, url: str) -> bytes:
         if url.startswith("/uploads/"):
@@ -369,7 +330,6 @@ class NovaMindBackend:
                         yield ": connected\n\n"
                         for chunk in upstream:
                             buf += chunk.decode()
-                            # keep-alive ping every ~15s for proxies
                             if time.time() - last_ping > 15:
                                 last_ping = time.time(); yield ": ping\n\n"
                             while "\n" in buf:
@@ -390,7 +350,7 @@ class NovaMindBackend:
                         data = json.loads(r.read().decode())
                         text, meta = self._extract(data)
                         if not text:
-                            return None, None, {"error": "Empty response"}
+                            return None, None, {"error": "Empty response from model"}
                         text = self._postprocess(text)
                         meta["model_variant"] = model_id
                         meta["latency_ms"] = int((time.time() - start) * 1000)
@@ -399,13 +359,9 @@ class NovaMindBackend:
             except Exception as e:
                 last_err = str(e)
                 continue
-        return None, None, {"error": last_err or "All keys failed"}
+        return None, None, {"error": last_err or "All API keys failed or are rate-limited."}
 
 backend = NovaMindBackend()
-
-# =========================
-# DB helpers
-# =========================
 
 def _get_conversation_memory(conversation_id: str) -> str:
     conn = sqlite3.connect(DB_PATH); c = conn.cursor()
@@ -423,9 +379,6 @@ def _save_message(conversation_id: str, role: str, content: str, attachments=Non
     c.execute("UPDATE conversations SET updated_at=? WHERE id=?", (datetime.datetime.now(), conversation_id))
     conn.commit(); conn.close()
 
-# =========================
-# API
-# =========================
 @app.route("/api/v2/health")
 def api_health():
     return jsonify({"ok": True, "app": APP_TITLE, "version": VERSION, "keys_loaded": len(_GOOGLE_KEYS)})
@@ -456,14 +409,18 @@ def api_chat_v2():
         mem = _get_conversation_memory(conversation_id)
         if mem:
             system_prompt = f"{system_prompt}\n\n[CONVERSATION MEMORY]\n{mem}\n[/CONVERSATION MEMORY]"
-    # Plugins injection
     if data.get("plugins"):
         for pid in data["plugins"]:
             plugin_output = plugin_manager.execute_plugin(pid, {"messages": messages, "model": model})
             messages.append({"role": "system", "content": f"Plugin result: {json.dumps(plugin_output)[:2000]}"})
 
+    if not messages or not any(m.get('content') or m.get('attachments') for m in messages):
+        return jsonify({"error": {"message": "User input cannot be empty."}}), 400
+
+    last_user_message = messages[-1]
+    _save_message(conversation_id, "user", last_user_message.get("content", ""), last_user_message.get("attachments"))
+
     if stream:
-        # Return SSE Response on success; JSON error on failure
         result = backend.generate(model, system_prompt, messages, config, stream=True)
         if isinstance(result, Response):
             return result
@@ -473,17 +430,15 @@ def api_chat_v2():
     text, meta, err = backend.generate(model, system_prompt, messages, config, stream=False)
     if err:
         return jsonify({"error": err}), 500
-    if messages:
-        last_user = next((m for m in reversed(messages) if m.get("role") == "user"), None)
-        if last_user:
-            _save_message(conversation_id, "user", last_user.get("content", ""), last_user.get("attachments"))
     _save_message(conversation_id, "assistant", text, [], meta)
     return jsonify({"response": text, "metadata": meta, "session_id": session_id, "conversation_id": conversation_id})
 
 @app.route("/api/v2/conversations", methods=["GET","POST"])
 def api_conversations():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
     if request.method == "GET":
-        conn = sqlite3.connect(DB_PATH); c = conn.cursor()
         c.execute("""
             SELECT id, title, created_at, updated_at, starred, tags
             FROM conversations
@@ -491,16 +446,26 @@ def api_conversations():
             ORDER BY updated_at DESC
             LIMIT 50
         """)
-        items = [{"id": r[0], "title": r[1], "created_at": r[2], "updated_at": r[3], "starred": bool(r[4]), "tags": json.loads(r[5] or "[]")} for r in c.fetchall()]
-        conn.close(); return jsonify(items)
+        items = [dict(row) for row in c.fetchall()]
+        for item in items:
+            item['starred'] = bool(item['starred'])
+            item['tags'] = json.loads(item['tags'] or "[]")
+        conn.close()
+        return jsonify(items)
+    
     data = request.json or {}
     conv_id = generate_conversation_id()
-    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
+    now = datetime.datetime.now()
     c.execute("""
         INSERT INTO conversations (id, title, created_at, updated_at, tags)
         VALUES (?, ?, ?, ?, ?)
-    """, (conv_id, data.get("title", "New Conversation"), datetime.datetime.now(), datetime.datetime.now(), json.dumps(data.get("tags", []))))
-    conn.commit(); conn.close(); return jsonify({"id": conv_id})
+    """, (conv_id, data.get("title", "New Conversation"), now, now, json.dumps(data.get("tags", []))))
+    conn.commit()
+    
+    c.execute("SELECT id, title, created_at, updated_at FROM conversations WHERE id=?", (conv_id,))
+    new_conv = dict(c.fetchone())
+    conn.close()
+    return jsonify(new_conv), 201
 
 @app.route("/api/v2/execute", methods=["POST"])
 def api_execute_code():
@@ -520,9 +485,7 @@ def api_search():
         c.execute("""
             SELECT m.id, m.conversation_id, m.content, c.title
             FROM messages m JOIN conversations c ON m.conversation_id=c.id
-            WHERE m.content LIKE ?
-            ORDER BY m.timestamp DESC
-            LIMIT 20
+            WHERE m.content LIKE ? ORDER BY m.timestamp DESC LIMIT 20
         """, (f"%{query}%",))
         results["messages"] = [{"id": r[0], "conversation_id": r[1], "content": r[2][:200], "conversation_title": r[3]} for r in c.fetchall()]
     conn.close(); return jsonify(results)
@@ -543,16 +506,12 @@ def api_export(conversation_id):
             who = "**You:**" if m[2] == "user" else "**Assistant:**"; out.extend([who, "", m[3], "", "---", ""])
         return Response("\n".join(out), mimetype="text/markdown")
     if fmt == "html":
-        html = [f"""
-        <!doctype html><html><head><meta charset='utf-8'/><title>{conv[1]} - Export</title>
+        html = [f"""<!doctype html><html><head><meta charset='utf-8'/><title>{conv[1]} - Export</title>
         <style>body{{font-family:Inter,system-ui,sans-serif;max-width:850px;margin:40px auto;padding:0 20px;color:#0f172a}}.msg{{border-radius:12px;padding:12px 14px;margin:12px 0}}.u{{background:#e0ecff;text-align:right}} .a{{background:#f3f4f6}}</style></head><body><h1>{conv[1]}</h1><p><em>Exported {datetime.datetime.now()}</em></p><hr>"""]
         for m in msgs: cls = "u" if m[2]=="user" else "a"; html.append(f"<div class='msg {cls}'>{m[3]}</div>")
         html.append("</body></html>"); return Response("".join(html), mimetype="text/html")
     return jsonify({"error": "Unsupported format"}), 400
 
-# =========================
-# UI (Tailwind + Prism + Mermaid)
-# =========================
 HTML = r"""<!doctype html>
 <html lang="en">
 <head>
@@ -578,8 +537,9 @@ body{background:radial-gradient(1200px 600px at 20% -20%, rgba(99,102,241,.15), 
 .code-wrap{position:relative;border-radius:12px;overflow:hidden;border:1px solid rgba(255,255,255,.08)}
 .code-head{display:flex;align-items:center;justify-content:space-between;background:rgba(99,102,241,.12);padding:6px 10px}
 .code-lang{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#a5b4fc}
-.copy{font-size:12px;background:rgba(99,102,241,.18);border:1px solid rgba(99,102,241,.3);padding:4px 10px;border-radius:8px}
+.copy{font-size:12px;background:rgba(99,102,241,.18);border:1px solid rgba(99,102,241,.3);padding:4px 10px;border-radius:8px;cursor:pointer;}
 .scroll-thin::-webkit-scrollbar{height:8px;width:8px}.scroll-thin::-webkit-scrollbar-thumb{background:rgba(99,102,241,.4);border-radius:4px}
+.prose pre { white-space: pre-wrap; }
 </style>
 </head>
 <body class="min-h-screen">
@@ -591,149 +551,148 @@ body{background:radial-gradient(1200px 600px at 20% -20%, rgba(99,102,241,.15), 
       <div><div class="font-bold text-lg">NovaMind Ultra</div><div class="text-xs text-slate-400">Advanced AI Assistant</div></div>
     </div>
     <div class="flex items-center gap-3">
-      <div class="hidden sm:flex items-center gap-2 text-xs text-slate-400"><span class="inline-block w-2 h-2 bg-emerald-400 rounded-full"></span>Online</div>
-      <select id="modelSelect" class="glass px-3 py-2 rounded-lg text-sm"><option value="ultra">Ultra</option><option value="sage">Sage</option><option value="spark">Spark</option><option value="vision">Vision</option></select>
-      <button id="settingsBtn" class="p-2 rounded-lg hover:bg-white/10" title="Settings"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756.426-1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c-.94 1.543.826 3.31 2.37 2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg></button>
+      <div id="status" class="hidden sm:flex items-center gap-2 text-xs text-slate-400"><span class="inline-block w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span><span id="statusText">Online</span></div>
+      <select id="modelSelect" class="glass px-3 py-2 rounded-lg text-sm"></select>
+      <button id="settingsBtn" class="p-2 rounded-lg hover:bg-white/10" title="Settings"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756.426-1.756 2.924 0 3.35a1.724 1.724 0 001.066 2.573c.94 1.543.826 3.31 2.37 2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg></button>
     </div>
   </div>
 </header>
-
 <aside id="sidebar" class="fixed top-0 left-0 h-full w-72 glass -translate-x-full transition-transform duration-300 z-50">
-  <div class="p-4 h-full flex flex-col">
-    <button id="newConvBtn" class="w-full mb-4 px-3 py-2 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600">New Conversation</button>
-    <div class="grid grid-cols-3 gap-2 text-xs text-slate-300">
-      <button class="tab active glass px-2 py-2 rounded-lg" data-tab="recent">Recent</button>
-      <button class="tab glass px-2 py-2 rounded-lg" data-tab="starred">Starred</button>
-      <button class="tab glass px-2 py-2 rounded-lg" data-tab="archive">Archive</button>
-    </div>
-    <div id="convList" class="mt-4 space-y-2 overflow-auto scroll-thin"></div>
-    <div class="mt-auto pt-4 border-t border-white/10 grid grid-cols-4 gap-2 text-center text-[11px] text-slate-300">
-      <button class="glass py-2 rounded-lg" id="exportBtn">Export</button>
-      <button class="glass py-2 rounded-lg" id="searchBtn">Search</button>
-      <button class="glass py-2 rounded-lg" id="pluginsBtn">Plugins</button>
-      <button class="glass py-2 rounded-lg" id="memoryBtn">Memory</button>
-    </div>
-  </div>
+  <div class="p-4 h-full flex flex-col"><button id="newConvBtn" class="w-full mb-4 px-3 py-2 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 font-semibold">New Conversation</button><div id="convList" class="mt-4 space-y-2 overflow-auto scroll-thin flex-grow"></div></div>
 </aside>
-
-<main class="pt-4 pb-36 px-4 max-w-4xl mx-auto">
-  <div class="glass rounded-2xl p-4 md:p-6">
+<main class="pt-4 pb-48 px-4 max-w-4xl mx-auto">
+  <div id="welcomeScreen" class="glass rounded-2xl p-4 md:p-6">
     <div class="flex items-start gap-3 bubble ai">
-      <div class="w-8 h-8 rounded-lg hero-grad flex items-center justify-center">🧠</div>
+      <div class="w-8 h-8 rounded-lg hero-grad flex items-center justify-center shrink-0">🧠</div>
       <div class="flex-1">
         <div class="text-xs text-slate-400 mb-1">NovaMind Ultra</div>
-        <div class="prose prose-invert max-w-none">
-          <p>Welcome! I can help with complex reasoning, production-quality code, research, and visuals. Switch modes above or just start typing.</p>
-        </div>
+        <div class="prose prose-invert max-w-none"><p>Welcome! I can help with complex reasoning, production-quality code, research, and visuals. Switch modes above or just start typing.</p></div>
       </div>
     </div>
   </div>
   <div id="chatContainer" class="mt-4 space-y-3"></div>
 </main>
-
 <footer class="fixed bottom-0 left-0 right-0 glass border-t border-white/10">
   <div class="max-w-4xl mx-auto p-3">
-    <div class="flex flex-wrap gap-2 mb-2">
-      <label class="glass px-3 py-1 rounded-lg text-xs cursor-pointer">📎 Attach<input type="file" id="fileInput" class="hidden" multiple></label>
-      <button class="glass px-3 py-1 rounded-lg text-xs" data-feature="code">💻 Code</button>
-      <button class="glass px-3 py-1 rounded-lg text-xs" data-feature="web">🌐 Web</button>
-      <button class="glass px-3 py-1 rounded-lg text-xs" data-feature="image">🖼️ Image</button>
-      <button class="glass px-3 py-1 rounded-lg text-xs" data-feature="memory">🧠 Memory</button>
-    </div>
+    <div id="attachmentPreview" class="flex flex-wrap gap-2 mb-2"></div>
     <div class="flex items-end gap-2">
-      <textarea id="messageInput" class="glass flex-1 p-3 rounded-xl min-h-[48px] max-h-48 resize-none" placeholder="Ask me anything… (Shift+Enter = newline)"></textarea>
-      <button id="sendBtn" class="px-4 py-3 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600">Send</button>
-    </div>
-    <div class="flex items-center justify-between mt-2 text-[11px] text-slate-400">
-      <div id="status">Ready</div>
-      <div class="flex items-center gap-4"><span>Tokens: <span id="tokenCount">0</span></span><span>Mode: <span id="currentMode">Ultra</span></span></div>
+      <label class="glass px-3 py-3 rounded-xl cursor-pointer hover:bg-white/10" title="Attach Files">📎<input type="file" id="fileInput" class="hidden" multiple></label>
+      <textarea id="messageInput" class="glass flex-1 p-3 rounded-xl min-h-[52px] max-h-48 resize-none scroll-thin" placeholder="Ask me anything… (Shift+Enter = newline)"></textarea>
+      <button id="sendBtn" class="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shrink-0" title="Send Message">
+        <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-8.707l-3-3a1 1 0 00-1.414 1.414L10.586 9H7a1 1 0 100 2h3.586l-1.293 1.293a1 1 0 101.414 1.414l3-3a1 1 0 000-1.414z" clip-rule="evenodd"/></svg>
+      </button>
     </div>
   </div>
 </footer>
-
 <div id="settingsModal" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm z-50 items-center justify-center">
-  <div class="glass rounded-2xl p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+  <div class="glass rounded-2xl p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto scroll-thin">
     <h2 class="text-xl font-semibold mb-4">Settings</h2>
     <div class="grid sm:grid-cols-2 gap-4">
       <div><label class="text-xs text-slate-400">Temperature</label><input type="range" min="0" max="2" step="0.1" value="0.7" id="temperature" class="w-full"><div class="text-xs" id="tempValue">0.7</div></div>
       <div><label class="text-xs text-slate-400">Max Tokens</label><input type="number" value="8192" id="maxTokens" class="glass px-3 py-2 rounded-lg w-full"></div>
       <div><label class="text-xs text-slate-400">Top P</label><input type="range" min="0" max="1" step="0.05" value="0.95" id="topP" class="w-full"><div class="text-xs" id="topPValue">0.95</div></div>
       <div><label class="text-xs text-slate-400">Top K</label><input type="number" value="40" id="topK" class="glass px-3 py-2 rounded-lg w-full"></div>
-      <div><label class="text-xs text-slate-400">Thinking Budget</label><input type="number" value="30000" id="thinkingBudget" class="glass px-3 py-2 rounded-lg w-full"></div>
       <div class="flex items-center gap-2 mt-4"><input type="checkbox" id="useMemory" checked><label for="useMemory" class="text-sm">Enable memory</label></div>
       <div class="flex items-center gap-2 mt-1"><input type="checkbox" id="streamResponses" checked><label for="streamResponses" class="text-sm">Stream responses</label></div>
     </div>
     <div class="flex justify-end gap-2 mt-6"><button id="closeSettings" class="px-3 py-2 rounded-lg hover:bg-white/10">Cancel</button><button id="saveSettings" class="px-3 py-2 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600">Save</button></div>
   </div>
 </div>
-
 <script>
 class NovaMindClient {
   constructor(){
     this.sessionId = this._id('sess');
-    this.conversationId = this._id('conv');
+    this.conversationId = null;
     this.messages = [];
     this.currentModel = 'ultra';
-    this.features = new Set();
     this.attachments = [];
-    this.settings = { temperature: 0.7, maxTokens: 8192, topP: 0.95, topK: 40, thinkingBudget: 30000, useMemory: true, stream: true, plugins: [] };
+    this.settings = { temperature: 0.7, maxTokens: 8192, topP: 0.95, topK: 40, useMemory: true, stream: true, plugins: [] };
     this.init();
   }
   _id(p){ return `${p}_${Date.now()}_${Math.random().toString(36).slice(2,9)}`; }
-  async init(){ this._bind(); this._status('Ready'); await this._loadModels(); await this._loadConversations(); }
+  async init(){ this._bind(); this._status('Ready'); await this._loadModels(); await this.startNewConversation(false); }
   _bind(){
     const input = document.getElementById('messageInput');
     document.getElementById('menuBtn').addEventListener('click', ()=> document.getElementById('sidebar').classList.toggle('-translate-x-full'));
-    document.getElementById('settingsBtn').addEventListener('click', ()=>{ const m=document.getElementById('settingsModal'); m.classList.remove('hidden'); m.classList.add('flex'); });
-    document.getElementById('closeSettings').addEventListener('click', ()=>{ const m=document.getElementById('settingsModal'); m.classList.add('hidden'); m.classList.remove('flex'); });
-    document.getElementById('saveSettings').addEventListener('click', ()=>{
-      this.settings.maxTokens = parseInt(document.getElementById('maxTokens').value||'8192',10);
-      this.settings.topK = parseInt(document.getElementById('topK').value||'40',10);
-      this.settings.thinkingBudget = parseInt(document.getElementById('thinkingBudget').value||'30000',10);
-      this.settings.useMemory = document.getElementById('useMemory').checked;
-      this.settings.stream = document.getElementById('streamResponses').checked;
-      this._status('Settings saved'); document.getElementById('settingsModal').classList.add('hidden');
-    });
+    document.getElementById('settingsBtn').addEventListener('click', ()=>document.getElementById('settingsModal').classList.toggle('hidden'));
+    document.getElementById('closeSettings').addEventListener('click', ()=>document.getElementById('settingsModal').classList.add('hidden'));
+    document.getElementById('saveSettings').addEventListener('click', ()=>{ this._saveSettings(); this._status('Settings saved'); document.getElementById('settingsModal').classList.add('hidden'); });
     document.getElementById('temperature').addEventListener('input', (e)=>{ this.settings.temperature = parseFloat(e.target.value); document.getElementById('tempValue').textContent = e.target.value; });
     document.getElementById('topP').addEventListener('input', (e)=>{ this.settings.topP = parseFloat(e.target.value); document.getElementById('topPValue').textContent = e.target.value; });
-    document.getElementById('modelSelect').addEventListener('change',(e)=>{ this.currentModel = e.target.value; document.getElementById('currentMode').textContent = e.target.selectedOptions[0].text; });
+    document.getElementById('modelSelect').addEventListener('change',(e)=>{ this.currentModel = e.target.value; });
     document.getElementById('fileInput').addEventListener('change',(e)=> this._uploadFiles(e.target.files));
     document.getElementById('sendBtn').addEventListener('click',()=> this.sendMessage());
+    document.getElementById('newConvBtn').addEventListener('click', ()=> this.startNewConversation(true));
     input.addEventListener('keydown',(e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); this.sendMessage(); } });
     input.addEventListener('input',()=>{ input.style.height='auto'; input.style.height=Math.min(input.scrollHeight, 192)+'px'; });
-    document.querySelectorAll('[data-feature]').forEach(el=>{ el.addEventListener('click', ()=>{ const f = el.dataset.feature; if(this.features.has(f)){ this.features.delete(f); el.classList.remove('ring-2','ring-indigo-400'); } else { this.features.add(f); el.classList.add('ring-2','ring-indigo-400'); } }); });
   }
-  async _loadModels(){ try{ const r=await fetch('/api/v2/models'); const d=await r.json(); const sel=document.getElementById('modelSelect'); sel.innerHTML=''; d.models.forEach(m=>{ const o=document.createElement('option'); o.value=m.id; o.textContent=m.label.replace('NovaMind','').trim(); sel.appendChild(o); }); }catch(e){ console.error(e); } }
-  async _loadConversations(){ try{ const r=await fetch('/api/v2/conversations'); const items=await r.json(); const list=document.getElementById('convList'); list.innerHTML=''; items.forEach(i=>{ const div=document.createElement('div'); div.className='glass p-3 rounded-lg cursor-pointer hover:bg-white/5'; div.innerHTML=`<div class="text-sm font-medium">${i.title}</div><div class="text-[11px] text-slate-400 mt-1">updated ${i.updated_at}</div>`; list.appendChild(div); }); }catch(e){ console.error(e); } }
-  async _uploadFiles(files){ const fd=new FormData(); for(const f of files) fd.append('files', f); try{ const r=await fetch('/api/upload',{method:'POST', body:fd}); const d=await r.json(); (d.files||[]).forEach(f=> this.attachments.push(f)); this._status(`${(d.files||[]).length} file(s) attached`);}catch(e){ this._status('Upload failed'); } }
-  _status(msg){ document.getElementById('status').textContent = msg; }
-  _format(md){ let html = marked.parse(md||''); html = html.replace(/<pre><code class=\"language-(\w+)\">([\s\S]*?)<\/code><\/pre>/g,(m,lang,code)=>{ const esc = this._escape(code); return `<div class=\"code-wrap\"><div class=\"code-head\"><span class=\"code-lang\">${lang}</span><button class=\"copy\" onclick=\"copyCode(this)\">Copy</button></div><pre class=\"!m-0\"><code class=\"language-${lang}\">${esc}</code></pre></div>`; }); return html; }
+  _saveSettings(){
+      this.settings.maxTokens = parseInt(document.getElementById('maxTokens').value||'8192',10);
+      this.settings.topK = parseInt(document.getElementById('topK').value||'40',10);
+      this.settings.useMemory = document.getElementById('useMemory').checked;
+      this.settings.stream = document.getElementById('streamResponses').checked;
+  }
+  async _loadModels(){ try{ const r=await fetch('/api/v2/models'); const d=await r.json(); const sel=document.getElementById('modelSelect'); sel.innerHTML=''; d.models.forEach(m=>{ const o=document.createElement('option'); o.value=m.id; o.textContent=m.label.split('(')[0].trim(); sel.appendChild(o); }); }catch(e){ console.error(e); this._status('Error loading models', true); } }
+  async _loadConversations(){ try{ const r=await fetch('/api/v2/conversations'); const items=await r.json(); const list=document.getElementById('convList'); list.innerHTML=''; items.forEach(i=>{ const div=document.createElement('div'); div.className='glass p-3 rounded-lg cursor-pointer hover:bg-white/5'; div.innerHTML=`<div class="text-sm font-medium truncate">${this._escape(i.title)}</div><div class="text-[11px] text-slate-400 mt-1">updated ${new Date(i.updated_at).toLocaleString()}</div>`; list.appendChild(div); }); }catch(e){ console.error(e); this._status('Error loading history', true); } }
+  async startNewConversation(fromClick = true) {
+    if (fromClick) {
+      const res = await fetch('/api/v2/conversations', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ title: 'New Conversation' }) });
+      const newConv = await res.json();
+      this.conversationId = newConv.id;
+    }
+    this.messages = [];
+    this.attachments = [];
+    document.getElementById('chatContainer').innerHTML = '';
+    document.getElementById('attachmentPreview').innerHTML = '';
+    document.getElementById('welcomeScreen').style.display = 'block';
+    await this._loadConversations();
+  }
+  _updateAttachmentPreview() {
+    const container = document.getElementById('attachmentPreview');
+    container.innerHTML = '';
+    this.attachments.forEach((file, index) => {
+        const el = document.createElement('div');
+        el.className = 'glass px-2 py-1 rounded text-xs flex items-center gap-1';
+        el.innerHTML = `<span>📎 ${file.name}</span><button data-index="${index}" class="text-red-400">&times;</button>`;
+        container.appendChild(el);
+    });
+    container.querySelectorAll('button').forEach(btn => {
+        btn.onclick = (e) => {
+            const index = parseInt(e.currentTarget.dataset.index, 10);
+            this.attachments.splice(index, 1);
+            this._updateAttachmentPreview();
+        };
+    });
+  }
+  async _uploadFiles(files){ const fd=new FormData(); for(const f of files) fd.append('files', f); this._status('Uploading...'); try{ const r=await fetch('/api/upload',{method:'POST', body:fd}); const d=await r.json(); (d.files||[]).forEach(f=> this.attachments.push(f)); this._updateAttachmentPreview(); this._status(`${(d.files||[]).length} file(s) attached`);}catch(e){ this._status('Upload failed', true); } }
+  _status(msg, isError = false){ document.getElementById('statusText').textContent = msg; const dot = document.querySelector('#status .w-2'); if(isError) { dot.classList.remove('bg-emerald-400'); dot.classList.add('bg-red-500'); } else { dot.classList.remove('bg-red-500'); dot.classList.add('bg-emerald-400'); }}
+  _format(md){ let html = marked.parse(md||''); html = html.replace(/<pre><code class="language-(\w+)">([\s\S]*?)<\/code><\/pre>/g,(m,lang,code)=>{ const esc = this._escape(code); return `<div class="code-wrap"><div class="code-head"><span class="code-lang">${lang}</span><button class="copy" onclick="copyCode(this)">Copy</button></div><pre class="!m-0 scroll-thin"><code class="language-${lang}">${esc}</code></pre></div>`; }); return html; }
   _escape(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
-  _highlight(el){ el.querySelectorAll('pre code').forEach(b=>Prism.highlightElement(b)); }
-  _addMessage(role, content, attachments=[], meta=null, streaming=false){ const wrap=document.getElementById('chatContainer'); const div=document.createElement('div'); div.className=`bubble ${role==='user'?'user':'ai'}`; div.innerHTML=`<div class=\"flex items-start gap-3\">${role==='assistant'?`<div class=\"w-8 h-8 rounded-lg hero-grad flex items-center justify-center\">🧠</div>`:''}<div class=\"flex-1\"><div class=\"text-[11px] text-slate-400 mb-1\">${role==='user'?'You':'NovaMind'}</div><div class=\"prose prose-invert max-w-none msg-content\">${streaming?'<em>Thinking…</em>':this._format(content)}</div>${attachments?.length?`<div class='flex gap-2 mt-2'>${attachments.map(a=>`<div class='glass px-2 py-1 rounded text-[11px]'>📎 ${a.name||'Attachment'}</div>`).join('')}</div>`:''}</div></div>`; wrap.appendChild(div); wrap.scrollTop=wrap.scrollHeight; if(!streaming) this._highlight(div); return div; }
-  _updateStreaming(div, content){ const c=div.querySelector('.msg-content'); c.innerHTML=this._format(content); this._highlight(div); }
+  _highlight(el){ el.querySelectorAll('pre code').forEach(b=>Prism.highlightElement(b)); el.querySelectorAll('.mermaid').forEach((m, i) => { m.id = `mermaid-${Date.now()}-${i}`; mermaid.render(m.id, m.textContent, (svg)=> { m.innerHTML = svg; }); }); }
+  _addMessage(role, content, attachments=[], streaming=false){ document.getElementById('welcomeScreen').style.display = 'none'; const wrap=document.getElementById('chatContainer'); const div=document.createElement('div'); div.className=`bubble ${role==='user'?'user':'ai'}`; const userIcon = `<div class="w-8 h-8 rounded-lg hero-grad flex items-center justify-center shrink-0">👤</div>`; const aiIcon = `<div class="w-8 h-8 rounded-lg hero-grad flex items-center justify-center shrink-0">🧠</div>`; div.innerHTML=`<div class="flex items-start gap-3">${role==='user'?userIcon:aiIcon}<div class="flex-1 min-w-0"><div class="text-xs text-slate-400 mb-1 font-semibold">${role==='user'?'You':'NovaMind'}</div><div class="prose prose-invert max-w-none msg-content">${streaming?'<span class="cursor">▍</span>':this._format(content)}</div>${attachments?.length?`<div class='flex flex-wrap gap-2 mt-2'>${attachments.map(a=>`<div class='glass px-2 py-1 rounded text-[11px] truncate'>📎 ${this._escape(a.name||'Attachment')}</div>`).join('')}</div>`:''}</div></div>`; wrap.appendChild(div); window.scrollTo(0, document.body.scrollHeight); if(!streaming) this._highlight(div); return div; }
+  _updateStreaming(div, content){ const c=div.querySelector('.msg-content'); c.innerHTML=this._format(content + ' <span class="cursor animate-pulse">▍</span>'); this._highlight(div); window.scrollTo(0, document.body.scrollHeight); }
+  _finalizeStreaming(div, content) { const c=div.querySelector('.msg-content'); c.innerHTML=this._format(content); this._highlight(div); }
   async sendMessage(){
-    const input = document.getElementById('messageInput');
-    const content = (input.value||'').trim(); if(!content && !this.attachments.length) return;
-    const attachments = this.attachments.slice();
-    input.disabled=true; document.getElementById('sendBtn').disabled=true;
-    this._addMessage('user', content, attachments);
-    this.messages.push({ role:'user', content, attachments });
-    input.value=''; input.style.height='auto'; this.attachments=[];
+    const input = document.getElementById('messageInput'); const content = (input.value||'').trim();
+    if (!this.conversationId) { await this.startNewConversation(true); }
+    if(!content && !this.attachments.length) return;
+    const attachments = this.attachments.slice(); input.disabled=true; document.getElementById('sendBtn').disabled=true;
+    this._addMessage('user', content, attachments); this.messages.push({ role:'user', content, attachments });
+    input.value=''; input.style.height='auto'; this.attachments=[]; this._updateAttachmentPreview();
     try{
-      const payload = { model:this.currentModel, messages:this.messages, session_id:this.sessionId, conversation_id:this.conversationId, temperature:this.settings.temperature, max_tokens:this.settings.maxTokens, top_p:this.settings.topP, top_k:this.settings.topK, thinking_budget:this.settings.thinkingBudget, use_memory:this.settings.useMemory, stream:this.settings.stream, plugins:Array.from(this.features) };
+      const payload = { model:this.currentModel, messages:this.messages, session_id:this.sessionId, conversation_id:this.conversationId, temperature:this.settings.temperature, max_tokens:this.settings.maxTokens, top_p:this.settings.topP, top_k:this.settings.topK, use_memory:this.settings.useMemory, stream:this.settings.stream, plugins:this.settings.plugins };
       if(this.settings.stream){ await this._stream(payload); } else { await this._once(payload); }
-    }catch(e){ console.error(e); this._addMessage('assistant','❌ An error occurred. Please try again.'); }
-    finally{ input.disabled=false; document.getElementById('sendBtn').disabled=false; input.focus(); }
+    }catch(e){ console.error(e); this._addMessage('assistant','❌ An error occurred. Please check the console and try again.'); this._status('Error', true); }
+    finally{ input.disabled=false; document.getElementById('sendBtn').disabled=false; input.focus(); await this._loadConversations(); }
   }
-  async _once(payload){ const r=await fetch('/api/v2/chat',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}); const d=await r.json(); if(d.error) throw new Error(d.error); this._addMessage('assistant', d.response); this.messages.push({ role:'assistant', content:d.response }); if(d.metadata?.usage){ const t=d.metadata.usage.totalTokens||0; document.getElementById('tokenCount').textContent=t.toLocaleString(); } }
-  async _stream(payload){ payload.stream=true; const res=await fetch('/api/v2/chat',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}); const reader=res.body.getReader(); const decoder=new TextDecoder(); let buf=''; let full=''; let div=null; while(true){ const {done,value}=await reader.read(); if(done) break; buf+=decoder.decode(value,{stream:true}); const lines=buf.split('\n'); buf=lines.pop(); for(const ln of lines){ if(!ln.startsWith('data: ')) continue; try{ const obj=JSON.parse(ln.slice(6)); if(!div) div=this._addMessage('assistant','',[],null,true); full+=obj.text; this._updateStreaming(div, full);}catch(e){} } } this.messages.push({ role:'assistant', content:full }); }
+  async _once(payload){ const r=await fetch('/api/v2/chat',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}); if(!r.ok){ const err=await r.json(); throw new Error(err.error?.message || 'Request failed'); } const d=await r.json(); this._addMessage('assistant', d.response); this.messages.push({ role:'assistant', content:d.response }); }
+  async _stream(payload){ payload.stream=true; const res=await fetch('/api/v2/chat',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}); if(!res.ok){ const err=await res.json(); throw new Error(err.error?.message || 'Request failed'); } const reader=res.body.getReader(); const decoder=new TextDecoder(); let buf=''; let full=''; let div=null; while(true){ const {done,value}=await reader.read(); if(done) break; buf+=decoder.decode(value,{stream:true}); const lines=buf.split('\n'); buf=lines.pop(); for(const ln of lines){ if(ln.startsWith(':')) continue; if(!ln.startsWith('data: ')) continue; try{ const obj=JSON.parse(ln.slice(6)); if(!div) div=this._addMessage('assistant','',[],true); if(obj.text) {full+=obj.text; this._updateStreaming(div, full);} }catch(e){console.error('Stream parse error:', e)} } } this.messages.push({ role:'assistant', content:full }); this._finalizeStreaming(div, full); }
 }
-
 window.copyCode = (btn)=>{ const code=btn.closest('.code-wrap').querySelector('code').textContent; navigator.clipboard.writeText(code).then(()=>{ btn.textContent='Copied!'; setTimeout(()=>btn.textContent='Copy', 1500); }); };
-
-window.novamindClient = new NovaMindClient();
-mermaid.initialize({ theme:'dark' });
+document.addEventListener('DOMContentLoaded', () => {
+    window.novamindClient = new NovaMindClient();
+    mermaid.initialize({ theme:'dark', startOnLoad: false });
+});
 </script>
 </body>
 </html>"""
@@ -744,6 +703,7 @@ def index():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
-    print(f"🚀 {APP_TITLE} v{VERSION} on :{port}")
-    print("🔑 Keys loaded:", len(_GOOGLE_KEYS))
+    key_status = "OK" if _GOOGLE_KEYS else "NOT SET"
+    print(f"🚀 {APP_TITLE} v{VERSION} running on http://0.0.0.0:{port}")
+    print(f"🔑 Gemini API Keys Loaded: {len(_GOOGLE_KEYS)} ({key_status})")
     app.run(host="0.0.0.0", port=port, debug=False)
