@@ -36,7 +36,7 @@ for d in [UPLOAD_DIR, CACHE_DIR, SESSIONS_DIR, PLUGINS_DIR]:
     os.makedirs(d, exist_ok=True)
 
 # Leave the fake key as-is (per your request)
-HARDCODED_GEMINI_KEY = "YOUR_GEMINI_KEY_HERE"
+HARDCODED_GEMINI_KEY = "AIzaSyCa7P192Lu1OGP3c5Q_BB8ADY4UpZMB2a4"
 
 _env_keys = [k.strip() for k in os.environ.get("GOOGLE_API_KEYS", "").split(",") if k.strip()]
 _GOOGLE_KEYS = ([HARDCODED_GEMINI_KEY] if HARDCODED_GEMINI_KEY and "YOUR_GEMINI_KEY_HERE" not in HARDCODED_GEMINI_KEY else []) + _env_keys
