@@ -24,7 +24,7 @@ except Exception as e:
         f"Import error was: {e}"
     )
 
-APP_TITLE = "NovaMind Ultra"
+APP_TITLE = "NovaMind"
 VERSION = "3.7.0-gemini25"
 
 TMP = tempfile.gettempdir()
@@ -43,7 +43,7 @@ _GOOGLE_KEYS = ([HARDCODED_GEMINI_KEY] if HARDCODED_GEMINI_KEY and "YOUR_GEMINI_
 
 # Updated model labels to 2.5 family
 NOVA_MODELS = [
-    {"id": "ultra",  "label": "🚀 NovaMind Ultra (2.5 Pro)",   "features": ["vision","code","analysis","creativity"]},
+    {"id": "ultra",  "label": "🚀 Short Answers (2.5 Pro)",   "features": ["vision","code","analysis","creativity"]},
     {"id": "sage",   "label": "🧙 NovaMind Sage (2.5 Pro)",    "features": ["analysis","research","planning"]},
     {"id": "spark",  "label": "⚡ NovaMind Spark (2.5 Flash)",  "features": ["speed","efficiency","realtime"]},
     {"id": "vision", "label": "👁️ NovaMind Vision (2.5 Pro)",  "features": ["images","documents","ocr"]},
@@ -282,7 +282,7 @@ class NovaMindBackend:
 
     def _enhance_prompt(self, base: str, model_id: str) -> str:
         presets = {
-            "ultra": "You are NovaMind Ultra — a powerful, concise, and helpful AI assistant. Structure your answers clearly, often using lists or tables. Be direct.",
+            "ultra": "You are NovaMind you should use the lowest yolens posable to answer something like whats 1plus1 do not explain anything just say 2 — a powerful, concise, and helpful AI assistant. shorten your answers clearly, . Be direct.",
             "sage": "You are NovaMind Sage — an AI expert in deep reasoning and planning. Think step-by-step, compare alternatives, and provide logical, well-supported conclusions.",
             "spark": "You are NovaMind Spark — an extremely fast and efficient AI. Prioritize speed and brevity in your responses.",
             "vision": "You are NovaMind Vision — a multimodal AI that excels at analyzing images. When an image is provided, describe its contents and significance in detail.",
