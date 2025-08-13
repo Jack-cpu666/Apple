@@ -34,7 +34,7 @@ for d in [UPLOAD_DIR, CACHE_DIR, SESSIONS_DIR, PLUGINS_DIR]:
     os.makedirs(d, exist_ok=True)
 
 # API keys come from env only (never hard-code secrets)
-_GOOGLE_KEYS = [k.strip() for k in os.environ.get("GOOGLE_API_KEYS", "AIzaSyCa7P192Lu1OGP3c5Q_BB8ADY4UpZMB2a4").split(",") if k.strip()]
+_GOOGLE_KEYS = [k.strip() for k in os.environ.get("GOOGLE_API_KEYS", "").split(",") if k.strip()]
 
 # Public model options (labels are just UI text)
 NOVA_MODELS = [
