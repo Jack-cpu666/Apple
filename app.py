@@ -1,15 +1,31 @@
+# app.py
+# NovaMind Ultra — Gemini 2.5 + google-genai SDK edition
+# Run:  pip install flask flask-cors google-genai
+# Then: python app.py
+
 import os, base64, json, mimetypes, time, re, tempfile, hashlib, threading, io, sys, traceback
 import sqlite3, uuid, datetime, gzip
 from collections import defaultdict, deque
-from urllib.request import Request, urlopen
+from urllib.request import urlopen  # only used for remote attachments
 from urllib.error import URLError, HTTPError
 from contextlib import redirect_stdout, redirect_stderr
 from flask import Flask, request, send_from_directory, jsonify, Response, stream_with_context
 from flask_cors import CORS
 import ast
 
+# === NEW: Google GenAI (official SDK) ===
+try:
+    from google import genai
+    from google.genai import types
+except Exception as e:
+    # Helpful error if the SDK isn't installed yet
+    raise SystemExit(
+        "google-genai SDK is required. Install with:\n\n   pip install --upgrade google-genai\n\n"
+        f"Import error was: {e}"
+    )
+
 APP_TITLE = "NovaMind Ultra"
-VERSION = "3.7.0"
+VERSION = "3.7.0-gemini25"
 
 TMP = tempfile.gettempdir()
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR") or os.path.join(TMP, "novamind_uploads")
@@ -19,25 +35,29 @@ PLUGINS_DIR = os.path.join(TMP, "novamind_plugins")
 for d in [UPLOAD_DIR, CACHE_DIR, SESSIONS_DIR, PLUGINS_DIR]:
     os.makedirs(d, exist_ok=True)
 
+# Leave the fake key as-is (per your request)
 HARDCODED_GEMINI_KEY = "YOUR_GEMINI_KEY_HERE"
 
 _env_keys = [k.strip() for k in os.environ.get("GOOGLE_API_KEYS", "").split(",") if k.strip()]
-_GOOGLE_KEYS = ([HARDCODED_GEMINI_KEY] if HARDCODED_GEMINI_KEY and "AIzaSyCa7P192Lu1OGP3c5Q_BB8ADY4UpZMB2a4" not in HARDCODED_GEMINI_KEY else []) + _env_keys
+_GOOGLE_KEYS = ([HARDCODED_GEMINI_KEY] if HARDCODED_GEMINI_KEY and "YOUR_GEMINI_KEY_HERE" not in HARDCODED_GEMINI_KEY else []) + _env_keys
 
+# Updated model labels to 2.5 family
 NOVA_MODELS = [
-    {"id": "ultra",  "label": "🚀 NovaMind Ultra (Pro 1.5)", "features": ["vision","code","analysis","creativity"]},
-    {"id": "sage",   "label": "🧙 NovaMind Sage (Pro 1.5)", "features": ["analysis","research","planning"]},
-    {"id": "spark",  "label": "⚡ NovaMind Spark (Flash 1.5)", "features": ["speed","efficiency","realtime"]},
-    {"id": "vision", "label": "👁️ NovaMind Vision (Pro 1.5)", "features": ["images","documents","ocr"]},
+    {"id": "ultra",  "label": "🚀 NovaMind Ultra (2.5 Pro)",   "features": ["vision","code","analysis","creativity"]},
+    {"id": "sage",   "label": "🧙 NovaMind Sage (2.5 Pro)",    "features": ["analysis","research","planning"]},
+    {"id": "spark",  "label": "⚡ NovaMind Spark (2.5 Flash)",  "features": ["speed","efficiency","realtime"]},
+    {"id": "vision", "label": "👁️ NovaMind Vision (2.5 Pro)",  "features": ["images","documents","ocr"]},
 ]
 
+# Map your UI model ids → actual Gemini model ids (Google GenAI SDK expects these)
 MODEL_MAP = {
     "ultra": "gemini-2.5-pro",
-    "sage": "gemini-1.5-pro-latest",
-    "spark": "gemini-1.5-flash-latest",
-    "vision": "gemini-1.5-pro-latest",
+    "sage": "gemini-2.5-pro",
+    "spark": "gemini-2.5-flash",
+    "vision": "gemini-2.5-pro",
 }
 
+# Keep your UI token knobs; SDK supports these via GenerateContentConfig
 TOKEN_LIMITS = {"max_input": 1_048_576, "max_output": 8192}
 
 DB_PATH = os.path.join(SESSIONS_DIR, "novamind.db")
@@ -138,6 +158,8 @@ def generate_session_id():
 def generate_conversation_id():
     return f"conv_{uuid.uuid4().hex}"
 
+# --- Uploads ---
+
 @app.route("/api/upload", methods=["POST"])
 def api_upload():
     files = request.files.getlist("files")
@@ -160,6 +182,8 @@ def api_upload():
 @app.route("/uploads/<path:filename>")
 def serve_upload(filename):
     return send_from_directory(UPLOAD_DIR, filename)
+
+# --- Safe code executor (unchanged) ---
 
 _ALLOWED_BUILTINS = {
     "print": print, "len": len, "range": range, "int": int, "float": float, "str": str,
@@ -209,6 +233,8 @@ class CodeExecutor:
             return {"success": False, "output": stdout_buf.getvalue(), "error": "Timeout"}
         return {"success": True, "output": stdout_buf.getvalue(), "error": stderr_buf.getvalue()}
 
+# --- Plugins ---
+
 class PluginManager:
     def __init__(self):
         self.plugins = {}; self.load_plugins()
@@ -235,20 +261,25 @@ context = {json.dumps(context)}
 
 plugin_manager = PluginManager()
 
+# --- Gemini backend (rewritten) ---
+
 class NovaMindBackend:
     def __init__(self):
         self.key_index = 0
         self.rate_limiter = defaultdict(lambda: {"count": 0, "reset": time.time() + 3600})
         self.performance_stats = defaultdict(list)
+
     def _next_key(self):
         if not _GOOGLE_KEYS:
             raise RuntimeError("No Gemini API key set. Replace HARDCODED_GEMINI_KEY or set GOOGLE_API_KEYS")
         key = _GOOGLE_KEYS[self.key_index % len(_GOOGLE_KEYS)]; self.key_index += 1; return key
+
     def _check_rl(self, key):
         now = time.time(); slot = self.rate_limiter[key]
         if now > slot["reset"]: slot["count"], slot["reset"] = 0, now + 3600
         if slot["count"] >= 60: return False
         slot["count"] += 1; return True
+
     def _enhance_prompt(self, base: str, model_id: str) -> str:
         presets = {
             "ultra": "You are NovaMind Ultra — a powerful, concise, and helpful AI assistant. Structure your answers clearly, often using lists or tables. Be direct.",
@@ -257,108 +288,128 @@ class NovaMindBackend:
             "vision": "You are NovaMind Vision — a multimodal AI that excels at analyzing images. When an image is provided, describe its contents and significance in detail.",
         }
         return f"[SYSTEM]\n{presets.get(model_id, presets['ultra'])}\n[/SYSTEM]\n\n{base or ''}"
-    def _build_contents(self, system_prompt: str, messages: list):
-        contents = []
-        if system_prompt:
-            contents.append({"role": "user", "parts": [{"text": system_prompt}]})
-            contents.append({"role": "model", "parts": [{"text": "Understood. I will follow all system instructions."}]})
 
-        for m in messages:
-            parts = []
-            if m.get("content"): parts.append({"text": m["content"]})
-            for att in m.get("attachments", []) or []:
-                url = att.get("url");
-                if not url: continue
-                try:
-                    data = self._fetch_attachment(url)
-                    mime = att.get("mime") or mimetypes.guess_type(url)[0] or "application/octet-stream"
-                    parts.append({"inlineData": {"mimeType": mime, "data": base64.b64encode(data).decode()}})
-                except Exception:
-                    pass
-            role = "user" if m.get("role") != "assistant" else "model"
-            if parts:
-                contents.append({"role": role, "parts": parts})
-        return contents
     def _fetch_attachment(self, url: str) -> bytes:
         if url.startswith("/uploads/"):
             path = os.path.join(UPLOAD_DIR, url.split("/uploads/")[1])
             with open(path, "rb") as f: return f.read()
         with urlopen(url, timeout=30) as r: return r.read()
-    def _extract(self, data: dict):
-        try:
-            cand = (data.get("candidates") or [])
-            if not cand: return None, {}
-            parts = cand[0].get("content", {}).get("parts", [])
-            text = "\n".join([p.get("text", "") for p in parts if "text" in p])
-            meta = {"usage": data.get("usageMetadata", {}), "finish_reason": cand[0].get("finishReason")}
-            return text, meta
-        except Exception:
-            return None, {}
+
+    def _build_contents(self, messages: list):
+        """Convert your chat format into GenAI SDK contents."""
+        contents = []
+        for m in messages:
+            role = "user" if m.get("role") != "assistant" else "model"
+            parts = []
+            if m.get("content"):
+                parts.append(types.Part.from_text(text=m["content"]))
+            for att in (m.get("attachments") or []):
+                url = att.get("url"); 
+                if not url: continue
+                try:
+                    data = self._fetch_attachment(url)
+                    mime = att.get("mime") or mimetypes.guess_type(url)[0] or "application/octet-stream"
+                    # Inline as bytes (works for images, audio, video, PDFs, etc.)
+                    parts.append(types.Part.from_bytes(data=data, mime_type=mime))
+                except Exception:
+                    # Skip failed attachments instead of breaking the whole request
+                    continue
+            if parts:
+                contents.append(types.Content(role=role, parts=parts))
+        return contents
+
     def _postprocess(self, text: str) -> str:
+        # small touch so code fences highlight as "python" by default in your UI
         return re.sub(r"```\n", "```python\n", text)
+
+    def _make_client(self, api_key: str):
+        # Explicit key (not env) so multi-key rotation still works
+        return genai.Client(api_key=api_key)
+
     def generate(self, model_id: str, system_prompt: str, messages: list, config: dict, stream: bool=False):
         start = time.time()
         cache_key = hashlib.md5(f"{model_id}|{system_prompt}|{json.dumps(messages)}|{json.dumps(config)}".encode()).hexdigest()
         if not stream:
             hit = cache.get(cache_key)
             if hit: return hit["text"], hit["meta"], None
+
         actual = MODEL_MAP.get(model_id, MODEL_MAP["ultra"])
-        contents = self._build_contents(self._enhance_prompt(system_prompt, model_id), messages)
-        gen_cfg = {
-            "candidateCount": 1,
-            "maxOutputTokens": max(1, min(TOKEN_LIMITS["max_output"], int(config.get("max_tokens", 8192)))),
-            "temperature": float(config.get("temperature", 0.7)),
-            "topP": float(config.get("top_p", 0.95)),
-            "topK": int(config.get("top_k", 40)),
-        }
-        payload = {"contents": contents, "generationConfig": gen_cfg}
-        def _req(url: str):
-            req = Request(url, data=json.dumps(payload).encode(), method="POST")
-            req.add_header("Content-Type", "application/json")
-            return urlopen(req, timeout=120)
+        contents = self._build_contents(messages)
+
+        # Generation config (SDK)
+        gen_cfg = types.GenerateContentConfig(
+            temperature=float(config.get("temperature", 0.7)),
+            top_p=float(config.get("top_p", 0.95)),
+            top_k=int(config.get("top_k", 40)),
+            max_output_tokens=max(1, min(TOKEN_LIMITS["max_output"], int(config.get("max_tokens", 8192)))),
+            candidate_count=1,
+            # Proper home for system instructions with the new SDK:
+            system_instruction=self._enhance_prompt(system_prompt, model_id) if system_prompt else None,
+        )
+
         last_err = None
         for _ in range(max(1, len(_GOOGLE_KEYS) or 1)):
             try:
                 key = self._next_key()
                 if not self._check_rl(key):
                     continue
+                client = self._make_client(key)
+
                 if stream:
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{actual}:streamGenerateContent?key={key}"
-                    upstream = _req(url)
+                    # Server-Sent Events stream
                     def gen():
-                        buf = ""; last_ping = time.time()
+                        last_ping = time.time()
                         yield ": connected\n\n"
-                        for chunk in upstream:
-                            buf += chunk.decode()
-                            if time.time() - last_ping > 15:
-                                last_ping = time.time(); yield ": ping\n\n"
-                            while "\n" in buf:
-                                line, buf = buf.split("\n", 1)
-                                line = line.strip()
-                                if not line: continue
-                                try:
-                                    data = json.loads(line)
-                                    text, _ = self._extract(data)
-                                    if text:
-                                        yield f"data: {json.dumps({'text': text})}\n\n"
-                                except Exception:
-                                    pass
+                        try:
+                            for chunk in client.models.generate_content_stream(
+                                model=actual, contents=contents, config=gen_cfg
+                            ):
+                                # keepalive comment every ~15s
+                                if time.time() - last_ping > 15:
+                                    last_ping = time.time()
+                                    yield ": ping\n\n"
+                                txt = getattr(chunk, "text", None)
+                                if txt:
+                                    yield f"data: {json.dumps({'text': txt})}\n\n"
+                        except Exception as e:
+                            yield f"data: {json.dumps({'error': str(e)})}\n\n"
                     return Response(stream_with_context(gen()), mimetype="text/event-stream")
+
                 else:
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{actual}:generateContent?key={key}"
-                    with _req(url) as r:
-                        data = json.loads(r.read().decode())
-                        text, meta = self._extract(data)
-                        if not text:
-                            return None, None, {"error": "Empty response from model"}
-                        text = self._postprocess(text)
-                        meta["model_variant"] = model_id
-                        meta["latency_ms"] = int((time.time() - start) * 1000)
-                        cache.set(cache_key, {"text": text, "meta": meta})
-                        return text, meta, None
+                    resp = client.models.generate_content(
+                        model=actual, contents=contents, config=gen_cfg
+                    )
+                    text = (resp.text or "").strip()
+                    if not text:
+                        return None, None, {"error": "Empty response from model"}
+                    text = self._postprocess(text)
+
+                    usage = {}
+                    # Try to pull usage metadata if present
+                    try:
+                        if hasattr(resp, "usage_metadata") and resp.usage_metadata:
+                            # naming can be usage_metadata or usageMetadata based on layer
+                            um = resp.usage_metadata
+                            usage = {
+                                "input_tokens": getattr(um, "prompt_token_count", None),
+                                "output_tokens": getattr(um, "candidates_token_count", None),
+                                "total_tokens": getattr(um, "total_token_count", None),
+                            }
+                    except Exception:
+                        pass
+
+                    meta = {
+                        "model_variant": model_id,
+                        "latency_ms": int((time.time() - start) * 1000),
+                        "usage": usage,
+                    }
+                    cache.set(cache_key, {"text": text, "meta": meta})
+                    return text, meta, None
+
             except Exception as e:
                 last_err = str(e)
                 continue
+
         return None, None, {"error": last_err or "All API keys failed or are rate-limited."}
 
 backend = NovaMindBackend()
@@ -379,9 +430,15 @@ def _save_message(conversation_id: str, role: str, content: str, attachments=Non
     c.execute("UPDATE conversations SET updated_at=? WHERE id=?", (datetime.datetime.now(), conversation_id))
     conn.commit(); conn.close()
 
+# --- API ---
+
 @app.route("/api/v2/health")
 def api_health():
-    return jsonify({"ok": True, "app": APP_TITLE, "version": VERSION, "keys_loaded": len(_GOOGLE_KEYS)})
+    try:
+        lib_ok = True
+    except Exception:
+        lib_ok = False
+    return jsonify({"ok": True, "app": APP_TITLE, "version": VERSION, "keys_loaded": len(_GOOGLE_KEYS), "genai": lib_ok})
 
 @app.route("/api/v2/models")
 def api_models_v2():
@@ -511,6 +568,8 @@ def api_export(conversation_id):
         for m in msgs: cls = "u" if m[2]=="user" else "a"; html.append(f"<div class='msg {cls}'>{m[3]}</div>")
         html.append("</body></html>"); return Response("".join(html), mimetype="text/html")
     return jsonify({"error": "Unsupported format"}), 400
+
+# --- UI (unchanged visuals, updated model names) ---
 
 HTML = r"""<!doctype html>
 <html lang="en">
